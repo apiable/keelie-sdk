@@ -1,0 +1,31 @@
+name: dco
+
+# Every commit of a pull request carries a Signed-off-by line (CONTRIBUTING.md). Required by the
+# ruleset on `main`.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sign-off:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Every commit is signed off
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for commit in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            if ! git log -1 --format=%B "$commit" | grep -qE '^Signed-off-by: .+ <.+@.+>$'; then
+              echo "::error::$(git log -1 --format='%h %s' "$commit") has no Signed-off-by line. Use git commit -s."
+              missing=1
+            fi
+          done
+          exit "$missing"

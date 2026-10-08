@@ -1,0 +1,3 @@
+# The owners review every change. The ruleset on `main` requires one approving review; an
+# administrator may merge their own pull request, through a pull request only.
+* @leantrace
