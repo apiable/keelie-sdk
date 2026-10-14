@@ -2,9 +2,8 @@
 
 **Placeholder. The Keelie SDK, by Apiable, is not released yet.**
 
-This package reserves the name while the SDK is in development. Installing it gives you nothing
-useful today, and importing anything from it raises `NotImplementedError` with a pointer to this
-note rather than a confusing error.
+This package reserves the name while the SDK is in development. The code in this repository is
+not released, and it has no stable API yet.
 
 ## What it will be
 
