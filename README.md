@@ -3,7 +3,7 @@
 **Keelie by Apiable.** You, the Provider, install this library in your own API to sell it. It checks
 tokens and scopes inside your own process, and it reports usage.
 
-> **Status: in development. This repository holds no SDK code yet.**
+> **Status: in development. The code here is not released, and it has no stable API yet.**
 > The first release is for Python and FastAPI. Other languages follow. Everything that ships is
 > published here, under the Apache License 2.0, so that you can read what runs in your process
 > instead of taking our word for it.
