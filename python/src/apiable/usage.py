@@ -47,7 +47,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # The one place that names keelie's usage endpoint.
-PATH = "/usage-events"
+PATH = "/usage-events:report"
 
 UNITS = frozenset({"request", "tool_call", "token", "outcome"})
 
