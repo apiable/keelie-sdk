@@ -28,6 +28,10 @@ from urllib.parse import urlsplit
 
 WELL_KNOWN = "/.well-known/oauth-protected-resource"
 
+# Where an agent looks for the AI Catalog of a domain. Public, like the metadata:
+# :class:`~apiable.catalog.AiCatalog` serves it, and no guard asks for a token.
+CATALOG_PATH = "/.well-known/ai-catalog.json"
+
 Scope = MutableMapping[str, object]
 Message = MutableMapping[str, object]
 Receive = Callable[[], Awaitable[Message]]
@@ -108,8 +112,9 @@ class ProtectedResourceMetadata:
         return f'Bearer error="{error}", resource_metadata="{self.url}"'
 
     def protects(self, path: str) -> bool:
-        """True for the path of ``resource`` and every path below it, except the metadata."""
-        if path == self.path:
+        """True for the path of ``resource`` and every path below it, except the metadata
+        and the AI Catalog."""
+        if path in (self.path, CATALOG_PATH):
             return False
         return not self._prefix or path == self._prefix or path.startswith(self._prefix + "/")
 
@@ -129,7 +134,8 @@ class MissingTokenChallenge:
         app.add_middleware(MissingTokenChallenge, metadata=metadata)
 
     It also serves the metadata, at ``metadata.path``, with no token. Every
-    other path outside ``resource`` passes untouched, and so do a CORS preflight
+    other path outside ``resource`` passes untouched, and so do the AI Catalog
+    (``/.well-known/ai-catalog.json``), a CORS preflight
     (``OPTIONS``) and every request that is not HTTP, such as a WebSocket.
 
     It compares the path the app receives with the path in ``resource``. Mount
@@ -174,7 +180,7 @@ async def respond(
 def guarded(scope: Scope, metadata: ProtectedResourceMetadata) -> bool:
     """True for an HTTP request under ``resource`` that must carry a token.
 
-    A CORS preflight (``OPTIONS``), the metadata itself, every path outside
+    A CORS preflight (``OPTIONS``), the metadata itself, the AI Catalog, every path outside
     ``resource`` and every request that is not HTTP pass untouched.
     """
     path = scope.get("path")

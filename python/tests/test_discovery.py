@@ -157,3 +157,18 @@ def test_scopes_are_published_only_as_a_list() -> None:
     assert b'"scopes_supported":["orders:read"]' in metadata.document
     with pytest.raises(ValueError):
         ProtectedResourceMetadata(RESOURCE, ISSUER, scopes_supported="orders:read")
+
+
+@pytest.mark.parametrize(
+    ("resource", "path", "protected"),
+    [
+        ("https://api.example.test", "/.well-known/ai-catalog.json", False),
+        ("https://api.example.test", "/.well-known/ai-catalog.json/x", True),
+        ("https://api.example.test", "/.well-known/ai-catalog.json.bak", True),
+        (RESOURCE, "/.well-known/ai-catalog.json", False),
+    ],
+)
+def test_only_the_exact_ai_catalog_path_needs_no_token(
+    resource: str, path: str, protected: bool
+) -> None:
+    assert ProtectedResourceMetadata(resource, ISSUER).protects(path) is protected
