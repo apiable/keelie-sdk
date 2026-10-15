@@ -14,7 +14,8 @@ What it checks on a request whose token verified:
 - Every other method passes with no scope check: ``initialize``,
   ``notifications/*``, ``ping``, ``tools/list``, and also ``resources/*`` and
   ``prompts/*``. Apiable sells tools, not resources or prompts.
-- ``GET`` and ``DELETE`` pass, and so does a CORS preflight (``OPTIONS``).
+- ``GET``, ``HEAD`` and ``DELETE`` pass, and so does a CORS preflight
+  (``OPTIONS``). Every other method gets ``405``, with ``Allow: GET, POST, DELETE``.
 
 Every refusal is a JSON-RPC error:
 
@@ -61,6 +62,9 @@ logger = logging.getLogger(__name__)
 TOOLS_CALL = "tools/call"
 
 MAX_BODY_BYTES = 4 * 1024 * 1024
+
+# The methods that carry no tool call. They pass after the token check.
+_PASS_METHODS = frozenset({"GET", "HEAD", "DELETE"})
 
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -120,8 +124,12 @@ class McpGuard(Guard):
         self._scope_refusal = metadata.challenge("insufficient_scope").encode()
 
     async def handle(self, claims: Claims, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["method"] != "POST":
+        if scope["method"] in _PASS_METHODS:
             await self._app(scope, receive, send)
+            return
+        if scope["method"] != "POST":
+            # A body under any other method could carry a tool call: refuse it.
+            await respond(send, 405, [(b"allow", b"GET, POST, DELETE")], b"")
             return
 
         body = bytearray()

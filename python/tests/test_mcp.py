@@ -239,6 +239,19 @@ async def test_a_get_passes_after_the_token_check(
     assert server.bodies == [b""]
 
 
+@pytest.mark.parametrize("method", ["PUT", "PATCH"])
+async def test_another_method_with_a_tool_call_gets_405(
+    client: httpx.AsyncClient, server: Server, signing_key: RSAPrivateKey, method: str
+) -> None:
+    response = await client.request(
+        method, "/mcp", content=_call("get_order"), headers=_auth(signing_key, "")
+    )
+
+    assert response.status_code == 405
+    assert response.headers["allow"] == "GET, POST, DELETE"
+    assert server.bodies == []
+
+
 @pytest.mark.parametrize(
     ("status", "sse", "counted"), [(200, True, 1), (200, False, 1), (500, False, 0)]
 )
