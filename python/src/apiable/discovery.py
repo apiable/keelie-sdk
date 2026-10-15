@@ -1,0 +1,186 @@
+"""Tell an agent where to get a token for your API.
+
+Two standard pieces, served from your own domain:
+
+- The protected resource metadata (RFC 9728). It names your API and the one
+  issuer that mints tokens for it. An agent reads it at the well-known address
+  of your API. For ``https://api.example.com/mcp`` that is
+  ``https://api.example.com/.well-known/oauth-protected-resource/mcp``.
+- A ``401`` with ``WWW-Authenticate: Bearer resource_metadata="..."`` on a
+  request that carries no token (RFC 6750, RFC 9728 section 5). An agent finds
+  the metadata from this refusal. It does not read the header on a ``200``.
+
+The issuer serves its own authorization server metadata (RFC 8414). The SDK
+does not copy it: it names the issuer, and the agent reads the issuer.
+
+:class:`MissingTokenChallenge` checks that a token is present. It does not
+check that the token is good. Verify every token with
+:class:`~apiable.TokenVerifier`, and answer a refused token with ``401`` and
+``ProtectedResourceMetadata.challenge("invalid_token")``.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Awaitable, Callable, Iterable, MutableMapping
+from urllib.parse import urlsplit
+
+WELL_KNOWN = "/.well-known/oauth-protected-resource"
+
+Scope = MutableMapping[str, object]
+Message = MutableMapping[str, object]
+Receive = Callable[[], Awaitable[Message]]
+Send = Callable[[Message], Awaitable[None]]
+ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
+
+# Printable ASCII with no space, quote or backslash: the URL goes inside a
+# quoted string of the header, as it is.
+_URL = re.compile(r"[!#-\[\]-~]+")
+
+
+def _https_url(name: str, value: str) -> str:
+    """The value, if it is an https URL with a host and no query or fragment."""
+    if not isinstance(value, str) or not _URL.fullmatch(value):
+        raise ValueError(f"{name} is not a URL: {value!r}")
+    parts = urlsplit(value)
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.username is not None
+        or parts.query
+        or parts.fragment
+        or (parts.path not in ("", "/") and parts.path.endswith("/"))
+    ):
+        raise ValueError(
+            f"{name} must be https, with a host, no user, query, fragment or final slash: {value!r}"
+        )
+    parts.port  # noqa: B018 - raises ValueError for a port that is not a number
+    return value
+
+
+class ProtectedResourceMetadata:
+    """The RFC 9728 metadata of your API, and the challenge that points to it.
+
+    ``resource`` is the URL an agent types for your API, exactly, path included.
+    The metadata repeats it as it is. ``authorization_server`` is the issuer,
+    the same value you give :class:`~apiable.TokenVerifier`. It is one issuer:
+    an agent uses the first and does not try a second.
+
+    ``scopes_supported`` is published only if you give it.
+    """
+
+    def __init__(
+        self,
+        resource: str,
+        authorization_server: str,
+        *,
+        scopes_supported: Iterable[str] | None = None,
+    ) -> None:
+        self.resource = _https_url("resource", resource)
+        issuer = _https_url("authorization_server", authorization_server)
+        parts = urlsplit(self.resource)
+        # The well-known name goes between the host and the path (RFC 9728 section 3.1).
+        self._prefix = "" if parts.path in ("", "/") else parts.path.rstrip("/")
+        self.path = WELL_KNOWN + self._prefix
+        # From the configuration, never from the request's Host.
+        self.url = f"{parts.scheme}://{parts.netloc}{self.path}"
+        document: dict[str, object] = {
+            "resource": self.resource,
+            "authorization_servers": [issuer],
+            "bearer_methods_supported": ["header"],
+        }
+        if scopes_supported is not None:
+            if isinstance(scopes_supported, str):
+                raise ValueError(f"give a list of scopes, not one string: {scopes_supported!r}")
+            scopes = list(scopes_supported)
+            if not all(isinstance(s, str) and s.split() == [s] for s in scopes):
+                raise ValueError(f"not one scope each: {scopes!r}")
+            document["scopes_supported"] = scopes
+        self.document = json.dumps(document, separators=(",", ":")).encode()
+
+    def challenge(self, error: str | None = None) -> str:
+        """The ``WWW-Authenticate`` value. Give ``error="invalid_token"`` for a refused token."""
+        if error is None:
+            return f'Bearer resource_metadata="{self.url}"'
+        if not re.fullmatch(r"[a-z_]+", error):
+            raise ValueError(f"not an RFC 6750 error code: {error!r}")
+        return f'Bearer error="{error}", resource_metadata="{self.url}"'
+
+    def protects(self, path: str) -> bool:
+        """True for the path of ``resource`` and every path below it, except the metadata."""
+        if path == self.path:
+            return False
+        return not self._prefix or path == self._prefix or path.startswith(self._prefix + "/")
+
+
+class MissingTokenChallenge:
+    """Refuses a request with no Bearer token. Checks presence only: not authentication.
+
+    The refusal is a 401 that names the metadata. A request that carries any
+    Bearer token goes on to your app, which must verify it with
+    :class:`~apiable.TokenVerifier`.
+
+    It is ASGI middleware. In FastAPI or Starlette::
+
+        metadata = ProtectedResourceMetadata(
+            "https://api.example.com/mcp", "https://issuer.example.com/realms/example"
+        )
+        app.add_middleware(MissingTokenChallenge, metadata=metadata)
+
+    It also serves the metadata, at ``metadata.path``, with no token. Every
+    other path outside ``resource`` passes untouched, and so do a CORS preflight
+    (``OPTIONS``) and every request that is not HTTP, such as a WebSocket.
+
+    It compares the path the app receives with the path in ``resource``. Mount
+    it where those two agree: behind a proxy that strips a prefix, they do not.
+    """
+
+    def __init__(self, app: ASGIApp, metadata: ProtectedResourceMetadata) -> None:
+        self._app = app
+        self._metadata = metadata
+        self._challenge = metadata.challenge().encode()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+        path = scope["path"]
+        if path == self._metadata.path and scope["method"] in ("GET", "HEAD"):
+            # Before the token check: with a resource at the root, the metadata
+            # is under it, and the agent reads it with no token.
+            await _respond(
+                send,
+                200,
+                [(b"content-type", b"application/json")],
+                self._metadata.document,
+                head=scope["method"] == "HEAD",
+            )
+            return
+        if (
+            scope["method"] != "OPTIONS"
+            and isinstance(path, str)
+            and self._metadata.protects(path)
+            and not _has_bearer(scope)
+        ):
+            await _respond(send, 401, [(b"www-authenticate", self._challenge)], b"")
+            return
+        await self._app(scope, receive, send)
+
+
+async def _respond(
+    send: Send, status: int, headers: list[tuple[bytes, bytes]], body: bytes, *, head: bool = False
+) -> None:
+    headers = [*headers, (b"content-length", str(len(body)).encode())]
+    await send({"type": "http.response.start", "status": status, "headers": headers})
+    await send({"type": "http.response.body", "body": b"" if head else body})
+
+
+def _has_bearer(scope: Scope) -> bool:
+    """True if the Authorization header carries a Bearer token. Its content is not checked."""
+    headers = scope.get("headers") or []
+    for name, value in headers:  # ASGI: an iterable of (name, value) byte pairs
+        if name == b"authorization":
+            scheme, _, token = value.decode("latin-1").strip().partition(" ")
+            return scheme.lower() == "bearer" and bool(token.strip())
+    return False
