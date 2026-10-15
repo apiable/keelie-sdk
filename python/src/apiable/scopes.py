@@ -60,6 +60,8 @@ class ScopeMap:
                 "unmapped" if required is None else "scope",
                 claims.azp,
                 method,
-                route,
+                # A route that is not in the map can come from the request,
+                # such as an MCP tool name, and stays out of the log.
+                route if required is not None else "-",
             )
             raise InsufficientScope(method, route)

@@ -149,7 +149,7 @@ class MissingTokenChallenge:
         if path == self._metadata.path and scope["method"] in ("GET", "HEAD"):
             # Before the token check: with a resource at the root, the metadata
             # is under it, and the agent reads it with no token.
-            await _respond(
+            await respond(
                 send,
                 200,
                 [(b"content-type", b"application/json")],
@@ -157,18 +157,13 @@ class MissingTokenChallenge:
                 head=scope["method"] == "HEAD",
             )
             return
-        if (
-            scope["method"] != "OPTIONS"
-            and isinstance(path, str)
-            and self._metadata.protects(path)
-            and not _has_bearer(scope)
-        ):
-            await _respond(send, 401, [(b"www-authenticate", self._challenge)], b"")
+        if guarded(scope, self._metadata) and bearer_token(scope) is None:
+            await respond(send, 401, [(b"www-authenticate", self._challenge)], b"")
             return
         await self._app(scope, receive, send)
 
 
-async def _respond(
+async def respond(
     send: Send, status: int, headers: list[tuple[bytes, bytes]], body: bytes, *, head: bool = False
 ) -> None:
     headers = [*headers, (b"content-length", str(len(body)).encode())]
@@ -176,11 +171,27 @@ async def _respond(
     await send({"type": "http.response.body", "body": b"" if head else body})
 
 
-def _has_bearer(scope: Scope) -> bool:
-    """True if the Authorization header carries a Bearer token. Its content is not checked."""
+def guarded(scope: Scope, metadata: ProtectedResourceMetadata) -> bool:
+    """True for an HTTP request under ``resource`` that must carry a token.
+
+    A CORS preflight (``OPTIONS``), the metadata itself, every path outside
+    ``resource`` and every request that is not HTTP pass untouched.
+    """
+    path = scope.get("path")
+    return (
+        scope["type"] == "http"
+        and scope.get("method") != "OPTIONS"
+        and isinstance(path, str)
+        and metadata.protects(path)
+    )
+
+
+def bearer_token(scope: Scope) -> str | None:
+    """The Bearer token in the Authorization header, or None. The token is not checked."""
     headers = scope.get("headers") or []
     for name, value in headers:  # ASGI: an iterable of (name, value) byte pairs
         if name == b"authorization":
             scheme, _, token = value.decode("latin-1").strip().partition(" ")
-            return scheme.lower() == "bearer" and bool(token.strip())
-    return False
+            token = token.strip()
+            return token if scheme.lower() == "bearer" and token else None
+    return None
