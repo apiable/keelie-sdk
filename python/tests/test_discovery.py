@@ -159,16 +159,11 @@ def test_scopes_are_published_only_as_a_list() -> None:
         ProtectedResourceMetadata(RESOURCE, ISSUER, scopes_supported="orders:read")
 
 
-@pytest.mark.parametrize(
-    ("resource", "path", "protected"),
-    [
-        ("https://api.example.test", "/.well-known/ai-catalog.json", False),
-        ("https://api.example.test", "/.well-known/ai-catalog.json/x", True),
-        ("https://api.example.test", "/.well-known/ai-catalog.json.bak", True),
-        (RESOURCE, "/.well-known/ai-catalog.json", False),
-    ],
-)
-def test_only_the_exact_ai_catalog_path_needs_no_token(
-    resource: str, path: str, protected: bool
-) -> None:
-    assert ProtectedResourceMetadata(resource, ISSUER).protects(path) is protected
+@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
+async def test_another_method_on_the_metadata_path_needs_a_token(method: str) -> None:
+    """With a resource at the root, the metadata path is under it. Only a GET or a HEAD of
+    it is served with no token."""
+    async with _client(App(), "https://api.example.test") as client:
+        response = await client.request(method, "/.well-known/oauth-protected-resource")
+
+    assert response.status_code == 401

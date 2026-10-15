@@ -44,10 +44,14 @@ async def _provider(scope: Scope, receive: Receive, send: Send) -> None:
     await send({"type": "http.response.body", "body": b""})
 
 
-def _guarded(keelie: Keelie, clock: Clock, guard: str) -> ASGIApp:
-    client = httpx.AsyncClient(base_url=KEELIE, transport=httpx.MockTransport(keelie.handler))
-    catalog = AiCatalog(_provider, client, clock=clock)
+def _guarded(
+    keelie: Keelie, clock: Clock, guard: str, *, auth: httpx.Auth | None = None
+) -> ASGIApp:
+    client = httpx.AsyncClient(
+        base_url=KEELIE, transport=httpx.MockTransport(keelie.handler), auth=auth
+    )
     metadata = ProtectedResourceMetadata(RESOURCE, ISSUER)
+    catalog = AiCatalog(_provider, client, metadata, clock=clock)
     verifier = None  # never reached: the catalog needs no token
     if guard == "challenge":
         return MissingTokenChallenge(catalog, metadata)
@@ -136,3 +140,40 @@ async def test_after_a_failure_keelie_is_asked_again_after_10_seconds_not_on_eac
     assert still.status_code == 503
     assert recovered.status_code == 200
     assert len(keelie.paths) == 2
+
+
+class BrokenAuth(httpx.Auth):
+    """A client failure that is not an HTTP error."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def auth_flow(self, request: httpx.Request):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        raise ValueError("no credential")
+        yield request  # pragma: no cover - makes this a generator
+
+
+async def test_any_client_failure_is_a_503_with_the_same_back_off() -> None:
+    auth = BrokenAuth()
+    app = _guarded(Keelie(), Clock(), "rest", auth=auth)
+
+    answers = await asyncio.gather(*(_get(app) for _ in range(5)))
+
+    assert [answer.status_code for answer in answers] == [503] * 5
+    assert auth.calls == 1
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
+async def test_another_method_on_the_catalog_path_needs_a_token(method: str) -> None:
+    response = await _get(_guarded(Keelie(), Clock(), "rest"), method)
+
+    assert response.status_code == 401
+
+
+async def test_a_guard_with_no_catalog_guards_the_catalog_path() -> None:
+    app = MissingTokenChallenge(_provider, ProtectedResourceMetadata(RESOURCE, ISSUER))
+
+    response = await _get(app)
+
+    assert response.status_code == 401

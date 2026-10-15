@@ -28,8 +28,8 @@ from urllib.parse import urlsplit
 
 WELL_KNOWN = "/.well-known/oauth-protected-resource"
 
-# Where an agent looks for the AI Catalog of a domain. Public, like the metadata:
-# :class:`~apiable.catalog.AiCatalog` serves it, and no guard asks for a token.
+# Where an agent looks for the AI Catalog of a domain. A GET or a HEAD of it needs
+# no token, but only once :class:`~apiable.catalog.AiCatalog` serves it.
 CATALOG_PATH = "/.well-known/ai-catalog.json"
 
 Scope = MutableMapping[str, object]
@@ -102,6 +102,9 @@ class ProtectedResourceMetadata:
                 raise ValueError(f"not one scope each: {scopes!r}")
             document["scopes_supported"] = scopes
         self.document = json.dumps(document, separators=(",", ":")).encode()
+        # Set by :class:`~apiable.catalog.AiCatalog` when it is made with this
+        # metadata. Until then the catalog path is guarded like any other.
+        self.ai_catalog = False
 
     def challenge(self, error: str | None = None) -> str:
         """The ``WWW-Authenticate`` value. Give ``error="invalid_token"`` for a refused token."""
@@ -112,10 +115,7 @@ class ProtectedResourceMetadata:
         return f'Bearer error="{error}", resource_metadata="{self.url}"'
 
     def protects(self, path: str) -> bool:
-        """True for the path of ``resource`` and every path below it, except the metadata
-        and the AI Catalog."""
-        if path in (self.path, CATALOG_PATH):
-            return False
+        """True for the path of ``resource`` and every path below it."""
         return not self._prefix or path == self._prefix or path.startswith(self._prefix + "/")
 
 
@@ -134,8 +134,8 @@ class MissingTokenChallenge:
         app.add_middleware(MissingTokenChallenge, metadata=metadata)
 
     It also serves the metadata, at ``metadata.path``, with no token. Every
-    other path outside ``resource`` passes untouched, and so do the AI Catalog
-    (``/.well-known/ai-catalog.json``), a CORS preflight
+    other path outside ``resource`` passes untouched, and so do a GET of the AI
+    Catalog when :class:`~apiable.catalog.AiCatalog` serves it, a CORS preflight
     (``OPTIONS``) and every request that is not HTTP, such as a WebSocket.
 
     It compares the path the app receives with the path in ``resource``. Mount
@@ -180,13 +180,20 @@ async def respond(
 def guarded(scope: Scope, metadata: ProtectedResourceMetadata) -> bool:
     """True for an HTTP request under ``resource`` that must carry a token.
 
-    A CORS preflight (``OPTIONS``), the metadata itself, the AI Catalog, every path outside
-    ``resource`` and every request that is not HTTP pass untouched.
+    A CORS preflight (``OPTIONS``), every path outside ``resource`` and every
+    request that is not HTTP pass untouched. So does a GET or a HEAD of the
+    metadata, and of the AI Catalog when :class:`~apiable.catalog.AiCatalog`
+    serves it. Any other method on those two paths needs a token.
     """
     path = scope.get("path")
+    method = scope.get("method")
+    if method in ("GET", "HEAD") and (
+        path == metadata.path or (metadata.ai_catalog and path == CATALOG_PATH)
+    ):
+        return False
     return (
         scope["type"] == "http"
-        and scope.get("method") != "OPTIONS"
+        and method != "OPTIONS"
         and isinstance(path, str)
         and metadata.protects(path)
     )

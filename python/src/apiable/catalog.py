@@ -2,7 +2,8 @@
 
 keelie builds the catalog from your published plans. :class:`AiCatalog` fetches
 it from keelie with your credential, keeps it for 60 seconds, and serves it with
-no token. A plan you publish shows here within 60 seconds.
+no token. A plan you publish shows here within 60 seconds, and within up to
+120 seconds at a client that caches the answer.
 
 The SDK does not change the document. It keeps no copy past 60 seconds: if keelie
 does not answer when the copy is old, the answer is ``503``, not an old catalog.
@@ -18,7 +19,15 @@ from typing import Callable
 
 import httpx
 
-from apiable.discovery import CATALOG_PATH, ASGIApp, Receive, Scope, Send, respond
+from apiable.discovery import (
+    CATALOG_PATH,
+    ASGIApp,
+    ProtectedResourceMetadata,
+    Receive,
+    Scope,
+    Send,
+    respond,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,24 +44,28 @@ class AiCatalog:
 
     ``client`` carries keelie's base URL and the auth of a credential that may
     read products, as for :class:`~apiable.UsageReporter`. It does not close it.
+    ``metadata`` is the one your token guard uses.
 
     It is ASGI middleware. In FastAPI or Starlette::
 
-        app.add_middleware(AiCatalog, client=client)
+        app.add_middleware(AiCatalog, client=client, metadata=metadata)
 
-    The token guards let this path pass with no token, so the order of the
-    middleware does not matter.
+    Making it with ``metadata`` tells the token guards to let a GET or a HEAD
+    of the catalog path pass with no token. Without it, they guard the path like
+    any other. The order of the middleware does not matter.
     """
 
     def __init__(
         self,
         app: ASGIApp,
         client: httpx.AsyncClient,
+        metadata: ProtectedResourceMetadata,
         *,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._app = app
         self._client = client
+        metadata.ai_catalog = True
         self._clock = clock
         self._body: bytes | None = None
         self._fetched_at = 0.0
@@ -92,7 +105,7 @@ class AiCatalog:
             self._body = None
             try:
                 response = await self._client.get(KEELIE_PATH)
-            except httpx.HTTPError as exc:
+            except Exception as exc:  # noqa: BLE001 - any client failure is a 503
                 logger.warning("apiable.catalog_fetch_failed error=%s", type(exc).__name__)
                 self._failed_at = self._clock()
                 return None
