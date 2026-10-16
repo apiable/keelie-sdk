@@ -157,3 +157,13 @@ def test_scopes_are_published_only_as_a_list() -> None:
     assert b'"scopes_supported":["orders:read"]' in metadata.document
     with pytest.raises(ValueError):
         ProtectedResourceMetadata(RESOURCE, ISSUER, scopes_supported="orders:read")
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
+async def test_another_method_on_the_metadata_path_needs_a_token(method: str) -> None:
+    """With a resource at the root, the metadata path is under it. Only a GET or a HEAD of
+    it is served with no token."""
+    async with _client(App(), "https://api.example.test") as client:
+        response = await client.request(method, "/.well-known/oauth-protected-resource")
+
+    assert response.status_code == 401
