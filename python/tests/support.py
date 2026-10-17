@@ -13,7 +13,6 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 ISSUER = "https://issuer.example.test/realms/test"
-JWKS_URI = f"{ISSUER}/protocol/openid-connect/certs"
 AUDIENCE = "provider-api"
 ORG_ID = uuid.UUID("01890000-0000-7000-8000-000000000001")
 
@@ -29,9 +28,16 @@ def jwk(kid: str, key: RSAPrivateKey, **extra: str) -> dict[str, str]:
 
 
 class Issuer:
-    """The issuer's discovery document and key set, served without a network."""
+    """The issuer's discovery document and key set, served without a network.
 
-    def __init__(self) -> None:
+    ``url`` is the realm. ``says`` is the ``issuer`` its discovery document names:
+    the realm itself, unless a test makes it lie.
+    """
+
+    def __init__(self, url: str = ISSUER, says: str | None = None) -> None:
+        self.url = url
+        self.says = url if says is None else says
+        self.jwks_uri = f"{url}/protocol/openid-connect/certs"
         self.keys: list[dict[str, str]] = []
         self.jwks_fetches = 0
         self.down = False
@@ -41,9 +47,9 @@ class Issuer:
         await asyncio.sleep(0.01)
         if self.down:
             return httpx.Response(503)
-        if str(request.url) == f"{ISSUER}/.well-known/openid-configuration":
-            return httpx.Response(200, json={"issuer": ISSUER, "jwks_uri": JWKS_URI})
-        if str(request.url) == JWKS_URI:
+        if str(request.url) == f"{self.url}/.well-known/openid-configuration":
+            return httpx.Response(200, json={"issuer": self.says, "jwks_uri": self.jwks_uri})
+        if str(request.url) == self.jwks_uri:
             self.jwks_fetches += 1
             return httpx.Response(200, json={"keys": self.keys})
         return httpx.Response(404)

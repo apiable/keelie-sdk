@@ -9,9 +9,13 @@ token:
    that says ``none`` or ``HS256`` is refused before any key is fetched.
 2. The key with that ``kid`` is in the issuer's key set.
 3. The signature, ``exp`` (required), ``nbf``, ``iat``, ``iss`` and ``aud``.
-4. ``azp`` names the client, and ``org_id`` is your own org id. In a shared
-   realm, every Provider's tokens share one issuer and one key set; ``org_id``
-   is what tells them apart.
+4. ``azp`` names the client, and ``org_id`` is your own org id.
+
+The issuer is your own realm: the ``issuer`` member of your org in keelie. Each
+Provider has its own realm, with its own ``iss`` and its own key set, so a token
+of another Provider fails at step 2 or 3. The ``org_id`` check stays as a second
+line: a Provider whose Consumers keelie made before it had a realm shares one
+issuer and one key set with others, and there ``org_id`` tells them apart.
 5. ``typ`` is ``Bearer``. An ID token is signed with the same key.
 
 Every refusal raises :class:`TokenRejected`. Its ``reason`` is for your log, not
@@ -73,7 +77,10 @@ class Claims:
 
 
 class TokenVerifier:
-    """Verifies the tokens of one issuer, for one audience and one org."""
+    """Verifies the tokens of one issuer, for one audience and one org.
+
+    ``issuer`` is the ``issuer`` member of your org in keelie: your own realm.
+    """
 
     def __init__(
         self,
