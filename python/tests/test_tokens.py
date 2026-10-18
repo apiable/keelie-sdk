@@ -5,12 +5,14 @@ import time
 import uuid
 from collections.abc import Callable
 
+import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from support import ORG_ID, Clock, Issuer, claims, jwk, private_key, signed_token
 
 from apiable import TokenRejected, TokenVerifier
+from apiable.keys import SigningKeys
 
 
 async def test_a_valid_token_verifies_with_one_fetch_for_all_callers(
@@ -178,3 +180,63 @@ async def test_a_key_with_no_use_and_no_alg_verifies(
     claims = await verifier.verify(signed_token(signing_key, kid="bare"))
 
     assert claims.azp == "client-1"
+
+
+REALM_A = "https://issuer.example.test/realms/01890000-0000-7000-8000-00000000000a"
+REALM_B = "https://issuer.example.test/realms/01890000-0000-7000-8000-00000000000b"
+
+
+def _verifier_for(issuer: Issuer, clock: Clock) -> TokenVerifier:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(issuer.handler))
+    return TokenVerifier(
+        issuer.url, "provider-api", ORG_ID, keys=SigningKeys(issuer.url, client=client, clock=clock)
+    )
+
+
+async def test_a_token_of_another_realm_is_refused(clock: Clock) -> None:
+    """Each Provider has its own realm. A verifier for realm B refuses a token of realm A, with
+    A's own key and with a key both realms hold, and still verifies its own."""
+    key_a, key_b = private_key(), private_key()
+    realm_a, realm_b = Issuer(REALM_A), Issuer(REALM_B)
+    realm_a.keys = [jwk("sig-a", key_a)]
+    realm_b.keys = [jwk("sig-b", key_b), jwk("shared", key_a)]
+    verifier_a, verifier_b = _verifier_for(realm_a, clock), _verifier_for(realm_b, clock)
+    token_a = signed_token(key_a, kid="sig-a", iss=REALM_A)
+
+    assert (await verifier_a.verify(token_a)).org_id == ORG_ID
+    with pytest.raises(TokenRejected) as unknown_key:
+        await verifier_b.verify(token_a)
+    assert unknown_key.value.reason == "kid"
+    with pytest.raises(TokenRejected) as wrong_issuer:
+        await verifier_b.verify(signed_token(key_a, kid="shared", iss=REALM_A))
+    assert wrong_issuer.value.reason == "issuer"
+    assert (await verifier_b.verify(signed_token(key_b, kid="sig-b", iss=REALM_B))).azp
+
+
+@pytest.mark.parametrize("says", [REALM_B, None, f"{REALM_A}x"])
+async def test_a_discovery_document_of_another_issuer_fetches_no_key(
+    clock: Clock, says: str | None
+) -> None:
+    """The discovery document must name the configured issuer (OpenID Connect Discovery 1.0,
+    section 4.3). Otherwise no key is fetched, and the token is refused."""
+    key = private_key()
+    realm = Issuer(REALM_A, says=says)
+    if says is None:
+        realm.says = ""  # a document that names no issuer at all
+    realm.keys = [jwk("sig-a", key)]
+
+    with pytest.raises(TokenRejected) as rejected:
+        await _verifier_for(realm, clock).verify(signed_token(key, kid="sig-a", iss=REALM_A))
+
+    assert rejected.value.reason == "keys_unavailable"
+    assert realm.jwks_fetches == 0
+
+
+async def test_a_trailing_slash_on_either_side_is_the_same_issuer(clock: Clock) -> None:
+    key = private_key()
+    realm = Issuer(REALM_A, says=f"{REALM_A}/")
+    realm.keys = [jwk("sig-a", key)]
+
+    claims = await _verifier_for(realm, clock).verify(signed_token(key, kid="sig-a", iss=REALM_A))
+
+    assert claims.org_id == ORG_ID

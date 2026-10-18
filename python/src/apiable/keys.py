@@ -12,6 +12,10 @@ down. With no key set in hand, a failed fetch caches nothing, and the next calle
 tries again.
 
 The ``jwks_uri`` from the first discovery is kept for the life of the process.
+A discovery document whose ``issuer`` is not the configured one is refused, and
+no key is fetched from it (OpenID Connect Discovery 1.0, section 4.3). Each
+Provider has its own realm, so each issuer has its own key set: a document of
+another realm must never fill this one's.
 """
 
 from __future__ import annotations
@@ -113,7 +117,11 @@ class SigningKeys:
         if jwks_uri is None:
             response = await client.get(f"{self._issuer}/.well-known/openid-configuration")
             response.raise_for_status()
-            jwks_uri = response.json()["jwks_uri"]
+            document = response.json()
+            issuer = document["issuer"]
+            if not isinstance(issuer, str) or issuer.rstrip("/") != self._issuer:
+                raise ValueError("issuer")
+            jwks_uri = document["jwks_uri"]
             if not isinstance(jwks_uri, str):
                 raise TypeError("jwks_uri")
         response = await client.get(jwks_uri)
