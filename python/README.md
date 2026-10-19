@@ -21,4 +21,7 @@ A failed usage report does not stop a call. A failed token check does. That chec
 
 In development. Python and FastAPI first; other languages follow.
 
+Documentation: the [quickstart](https://github.com/apiable/keelie-sdk/blob/main/docs/quickstart.md)
+and the [reference](https://github.com/apiable/keelie-sdk/blob/main/docs/python.md).
+
 Source: <https://github.com/apiable/keelie-sdk>. Progress and early access: <https://apiable.io>.

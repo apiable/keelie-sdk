@@ -26,12 +26,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
 import jwt
 
-from apiable.keys import ALGORITHM, KeysUnavailable, SigningKeys, UnknownKey
+from apiable.keys import ALGORITHM, KeysUnavailable, SigningKeys, Status, UnknownKey
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,9 @@ class Claims:
     org_id: UUID
     scopes: frozenset[str]
     jti: str | None
+    # When the token expires, from ``exp``, in UTC. While keelie is down, the
+    # Consumer is served until then, and refused after.
+    expires_at: datetime
 
 
 class TokenVerifier:
@@ -110,6 +114,21 @@ class TokenVerifier:
             logger.info("apiable.token_rejected reason=%s", exc.reason)
             raise
         return claims
+
+    def status(self) -> Status:
+        """What the SDK knows of the issuer, from its last fetch of the key set.
+
+        - ``connected``: the last fetch worked.
+        - ``degraded``: the last fetch failed. The keys in hand go on verifying.
+          The next fetch that works makes it ``connected`` again.
+        - ``offline``: no key in hand, so every token is refused. A process is
+          ``offline`` until the first token fetches the key set.
+
+        It makes no network call, and the SDK does not poll. The SDK fetches only
+        on a cold start and for a key it does not know. So while the keys in hand
+        verify every token, an outage of the issuer leaves the status as it is.
+        """
+        return self._keys.status()
 
     async def _verify(self, token: str) -> Claims:
         try:
@@ -172,4 +191,14 @@ class TokenVerifier:
             raise TokenRejected("org")
         if payload.get("typ") != TOKEN_TYPE:
             raise TokenRejected("typ")
-        return Claims(azp=azp, org_id=org_id, scopes=frozenset(scope.split()), jti=jti)
+        try:
+            expires_at = datetime.fromtimestamp(payload["exp"], timezone.utc)
+        except (OverflowError, OSError, TypeError, ValueError) as exc:
+            raise TokenRejected("claims") from exc
+        return Claims(
+            azp=azp,
+            org_id=org_id,
+            scopes=frozenset(scope.split()),
+            jti=jti,
+            expires_at=expires_at,
+        )
