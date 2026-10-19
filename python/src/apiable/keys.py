@@ -24,6 +24,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
+from typing import Literal
 
 import httpx
 import jwt
@@ -38,6 +39,8 @@ ALGORITHM = "RS256"
 REFRESH_INTERVAL_SECONDS = 60.0
 
 FETCH_TIMEOUT_SECONDS = 5.0
+
+Status = Literal["connected", "degraded", "offline"]
 
 
 class UnknownKey(LookupError):
@@ -66,6 +69,7 @@ class SigningKeys:
         self._keys: dict[str, jwt.PyJWK] = {}
         self._jwks_uri: str | None = None
         self._fetched_at: float | None = None
+        self._refresh_failed = False
         # Made on first use, inside the running event loop: on Python 3.9 a lock
         # made outside it binds to a different loop.
         self._lock: asyncio.Lock | None = None
@@ -85,6 +89,12 @@ class SigningKeys:
             return self._keys[kid]
         raise UnknownKey(kid)
 
+    def status(self) -> Status:
+        """``offline`` with no key, ``degraded`` if the last fetch failed, else ``connected``."""
+        if not self._keys:
+            return "offline"
+        return "degraded" if self._refresh_failed else "connected"
+
     def _may_fetch(self) -> bool:
         return self._fetched_at is None or self._clock() - self._fetched_at >= self._interval
 
@@ -100,10 +110,12 @@ class SigningKeys:
             # Warm: the keys in hand go on verifying, and the issuer is not asked
             # again for another interval.
             self._fetched_at = self._clock()
+            self._refresh_failed = True
             logger.warning("apiable.keys_not_refreshed: %s", type(exc).__name__)
             return
         self._keys = keys
         self._fetched_at = self._clock()
+        self._refresh_failed = False
         logger.info("apiable.keys_loaded kids=%s", sorted(self._keys))
 
     async def _fetch(self) -> object:

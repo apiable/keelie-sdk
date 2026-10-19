@@ -4,6 +4,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timezone
 
 import httpx
 import jwt
@@ -240,3 +241,61 @@ async def test_a_trailing_slash_on_either_side_is_the_same_issuer(clock: Clock) 
     claims = await _verifier_for(realm, clock).verify(signed_token(key, kid="sig-a", iss=REALM_A))
 
     assert claims.org_id == ORG_ID
+
+
+async def test_the_status_is_offline_until_the_first_token_fetches_the_keys(
+    verifier: TokenVerifier, signing_key: RSAPrivateKey
+) -> None:
+    assert verifier.status() == "offline"
+
+    await verifier.verify(signed_token(signing_key))
+
+    assert verifier.status() == "connected"
+
+
+async def test_the_status_is_offline_while_the_issuer_is_down_and_no_key_is_in_hand(
+    verifier: TokenVerifier, issuer: Issuer, signing_key: RSAPrivateKey
+) -> None:
+    issuer.down = True
+    with pytest.raises(TokenRejected):
+        await verifier.verify(signed_token(signing_key))
+
+    assert verifier.status() == "offline"
+
+
+async def test_the_status_is_degraded_after_a_failed_refresh_and_connected_after_a_good_one(
+    verifier: TokenVerifier, issuer: Issuer, signing_key: RSAPrivateKey, clock: Clock
+) -> None:
+    await verifier.verify(signed_token(signing_key))
+    issuer.down = True
+    clock.now += 60
+    with pytest.raises(TokenRejected):
+        await verifier.verify(signed_token(signing_key, kid="sig-2"))
+
+    assert verifier.status() == "degraded"
+
+    issuer.down = False
+    clock.now += 60
+    with pytest.raises(TokenRejected):
+        await verifier.verify(signed_token(signing_key, kid="sig-2"))
+
+    assert verifier.status() == "connected"
+
+
+async def test_a_token_whose_exp_is_a_string_is_refused(
+    verifier: TokenVerifier, signing_key: RSAPrivateKey
+) -> None:
+    with pytest.raises(TokenRejected) as rejected:
+        await verifier.verify(signed_token(signing_key, exp=str(int(time.time()) + 300)))
+
+    assert rejected.value.reason == "claims"
+
+
+async def test_the_claims_say_when_the_token_expires(
+    verifier: TokenVerifier, signing_key: RSAPrivateKey
+) -> None:
+    exp = int(time.time()) + 300
+
+    claims = await verifier.verify(signed_token(signing_key, exp=exp))
+
+    assert claims.expires_at == datetime.fromtimestamp(exp, timezone.utc)

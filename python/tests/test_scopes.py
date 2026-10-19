@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 
@@ -17,7 +18,13 @@ SCOPES = ScopeMap(
 
 
 def _claims(scope: str) -> Claims:
-    return Claims(azp="client-1", org_id=ORG_ID, scopes=frozenset(scope.split()), jti=None)
+    return Claims(
+        azp="client-1",
+        org_id=ORG_ID,
+        scopes=frozenset(scope.split()),
+        jti=None,
+        expires_at=datetime.now(timezone.utc),
+    )
 
 
 @pytest.mark.parametrize(

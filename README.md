@@ -4,11 +4,26 @@
 tokens and scopes inside your own process, and it reports usage.
 
 > **Status: in development. The code here is not released, and it has no stable API yet.**
-> The first release is for Python and FastAPI. Other languages follow. Everything that ships is
-> published here, under the Apache License 2.0, so that you can read what runs in your process
-> instead of taking our word for it.
+> The first release is for Python and any ASGI framework, such as FastAPI. Other languages follow.
+> Everything that ships is published here, under the Apache License 2.0, so that you can read what
+> runs in your process instead of taking our word for it.
 
-## What it will do
+## Documentation
+
+| Page | What it holds |
+|---|---|
+| [Quickstart](docs/quickstart.md) | From signup to a protected route, on one page. |
+| [Python SDK reference](docs/python.md) | Every class, its arguments, its return value and its errors. |
+| [When keelie is down](docs/when-keelie-is-down.md) | What the SDK does in each failure. |
+
+**You can use keelie without this SDK.** The token is a standard JWT, and the usage API is plain
+HTTP. Check tokens with the JWT library or the gateway you already have, and report usage from any
+language. Both follow the published keelie contract:
+<https://raw.githubusercontent.com/apiable/keelie-sdk/contract/openapi/keelie.json> and the
+[token rules](https://github.com/apiable/keelie-sdk/blob/contract/docs/token-rules.md), published
+with each keelie release.
+
+## What it does
 
 - **Check each token inside your process.** The SDK verifies a token against the issuer's key set,
   which it fetches and caches. It never asks Apiable for a verdict on a request.
@@ -16,7 +31,7 @@ tokens and scopes inside your own process, and it reports usage.
 - **Report usage in batches, after the response.** A failed report never stops a request. A failed
   token check does, and that check is local.
 
-## What it will never do
+## What it never does
 
 - **It is not in the path of your API call.** Your requests do not pass through Apiable. Nothing
   in this SDK forwards, proxies or terminates them.
@@ -28,7 +43,8 @@ tokens and scopes inside your own process, and it reports usage.
 
 | Folder | What it holds |
 |---|---|
-| [`python/`](python/) | The Python package `apiable` on PyPI. Today it is a placeholder that reserves the name. |
+| [`python/`](python/) | The Python package `apiable`. On PyPI today it is a placeholder that reserves the name. |
+| [`docs/`](docs/) | The documentation. |
 
 ## Security
 

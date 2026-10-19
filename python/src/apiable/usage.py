@@ -3,7 +3,7 @@
 :meth:`UsageReporter.record` puts one event in a buffer in memory and returns. It
 does no I/O and never awaits, so it adds no time to the request that calls it. A
 background task sends the buffer to keelie's usage endpoint: when it holds a full
-batch, and at each interval.
+batch, and at each interval. The interval is 5 seconds unless you set another.
 
 What the SDK reports is telemetry. It feeds the Provider's dashboards and the
 Consumer's spend cap. Apiable never puts it on an invoice.
@@ -57,7 +57,9 @@ MAX_AMOUNT = Decimal(10) ** 9
 _PLACE = Decimal("0.000001")
 MAX_BATCH_SIZE = 1000
 BATCH_SIZE = 50
-FLUSH_INTERVAL_SECONDS = 10.0
+# At most 5 seconds. A Consumer's balance may go below zero for 60 seconds at most, and
+# that window must hold one flush, one failed flush, a retry and a burst.
+FLUSH_INTERVAL_SECONDS = 5.0
 MAX_BUFFERED_EVENTS = 10_000
 CLOSE_TIMEOUT_SECONDS = 10.0
 
