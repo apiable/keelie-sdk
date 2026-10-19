@@ -4,7 +4,7 @@ import asyncio
 
 import httpx
 import pytest
-from support import ISSUER, Clock
+from support import ISSUER, ORG_ID, Clock
 
 from apiable import (
     AiCatalog,
@@ -12,6 +12,7 @@ from apiable import (
     MissingTokenChallenge,
     ProtectedResourceMetadata,
     TokenGuard,
+    TokenVerifier,
     UsageReporter,
 )
 from apiable.catalog import KEELIE_PATH
@@ -52,13 +53,14 @@ def _guarded(
     )
     metadata = ProtectedResourceMetadata(RESOURCE, ISSUER)
     catalog = AiCatalog(_provider, client, metadata, clock=clock)
-    verifier = None  # never reached: the catalog needs no token
+    # Never asked: the catalog needs no token. Its audience is the resource, as a guard needs.
+    verifier = TokenVerifier(ISSUER, RESOURCE, ORG_ID)
     if guard == "challenge":
         return MissingTokenChallenge(catalog, metadata)
     if guard == "rest":
-        return TokenGuard(catalog, verifier, metadata)  # type: ignore[arg-type]
+        return TokenGuard(catalog, verifier, metadata)
     reporter = UsageReporter(client)
-    return McpGuard(catalog, verifier, metadata, {}, reporter=reporter)  # type: ignore[arg-type]
+    return McpGuard(catalog, verifier, metadata, {}, reporter=reporter)
 
 
 async def _get(app: ASGIApp, method: str = "GET") -> httpx.Response:

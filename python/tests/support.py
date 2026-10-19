@@ -13,7 +13,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 ISSUER = "https://issuer.example.test/realms/test"
-AUDIENCE = "provider-api"
+# The ``resource`` of the REST API under test, and so the ``aud`` of its tokens.
+AUDIENCE = "https://api.example.test/api"
 ORG_ID = uuid.UUID("01890000-0000-7000-8000-000000000001")
 
 

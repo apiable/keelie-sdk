@@ -144,6 +144,9 @@ def test_the_challenge_for_a_refused_token_carries_the_error() -> None:
         "https://api.example.test:port/mcp",
         "https://api.example.test/mcp/",
         "/mcp",
+        # keelie compares `aud` exactly with the resource it stored, which is lowercase.
+        "HTTPS://api.example.test/mcp",
+        "https://API.example.test/mcp",
     ],
 )
 def test_a_resource_that_is_not_a_plain_https_url_is_refused(resource: str) -> None:

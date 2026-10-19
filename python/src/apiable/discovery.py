@@ -44,7 +44,12 @@ _URL = re.compile(r"[!#-\[\]-~]+")
 
 
 def _https_url(name: str, value: str) -> str:
-    """The value, if it is an https URL with a host and no query or fragment."""
+    """The value, if it is an https URL with a host and no query or fragment.
+
+    The scheme and the host must be lowercase: an uppercase one is refused, not
+    folded. keelie stores your ``resource`` with the same rule and puts it into
+    ``aud`` exactly, so the value here and the ``aud`` of a token compare equal.
+    """
     if not isinstance(value, str) or not _URL.fullmatch(value):
         raise ValueError(f"{name} is not a URL: {value!r}")
     parts = urlsplit(value)
@@ -60,6 +65,9 @@ def _https_url(name: str, value: str) -> str:
             f"{name} must be https, with a host, no user, query, fragment or final slash: {value!r}"
         )
     parts.port  # noqa: B018 - raises ValueError for a port that is not a number
+    # `urlsplit` lowercases the scheme, so read the text as it was written.
+    if not value.startswith("https://") or parts.netloc != parts.netloc.lower():
+        raise ValueError(f"{name} must have a lowercase scheme and host: {value!r}")
     return value
 
 

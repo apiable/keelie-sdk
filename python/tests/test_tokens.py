@@ -9,7 +9,7 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
-from support import ORG_ID, Clock, Issuer, claims, jwk, private_key, signed_token
+from support import AUDIENCE, ORG_ID, Clock, Issuer, claims, jwk, private_key, signed_token
 
 from apiable import TokenRejected, TokenVerifier
 from apiable.keys import SigningKeys
@@ -189,7 +189,7 @@ REALM_B = "https://issuer.example.test/realms/01890000-0000-7000-8000-0000000000
 def _verifier_for(issuer: Issuer, clock: Clock) -> TokenVerifier:
     client = httpx.AsyncClient(transport=httpx.MockTransport(issuer.handler))
     return TokenVerifier(
-        issuer.url, "provider-api", ORG_ID, keys=SigningKeys(issuer.url, client=client, clock=clock)
+        issuer.url, AUDIENCE, ORG_ID, keys=SigningKeys(issuer.url, client=client, clock=clock)
     )
 
 
