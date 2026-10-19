@@ -12,7 +12,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
-from support import ISSUER, private_key, signed_token
+from support import AUDIENCE, ISSUER, ORG_ID, private_key, signed_token
 
 import apiable
 import apiable.guard
@@ -21,7 +21,7 @@ from apiable.discovery import ASGIApp, Receive, Scope, Send
 from apiable.guard import CLAIMS_KEY
 from apiable.tokens import Claims
 
-RESOURCE = "https://api.example.test/api"
+RESOURCE = AUDIENCE
 METADATA_URL = "https://api.example.test/.well-known/oauth-protected-resource/api"
 TOOLS_LIST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
@@ -92,6 +92,19 @@ async def test_both_adapters_answer_each_token_the_same(
         assert response.headers["www-authenticate"] == challenge
     else:
         assert "www-authenticate" not in response.headers
+
+
+@ADAPTERS
+def test_neither_adapter_starts_for_an_audience_that_is_not_the_resource(
+    adapter: Adapter, verifier: TokenVerifier
+) -> None:
+    """keelie writes the org's ``resource`` into ``aud`` (RFC 8707, keelie#24). A verifier for
+    another audience would refuse every token an agent asked for this ``resource``."""
+    elsewhere = TokenVerifier(ISSUER, "https://api.example.test/other", ORG_ID)
+
+    with pytest.raises(ValueError, match="is not the resource"):
+        adapter(_provider, elsewhere)
+    assert adapter(_provider, verifier) is not None
 
 
 @ADAPTERS

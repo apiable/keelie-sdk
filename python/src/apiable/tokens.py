@@ -97,6 +97,11 @@ class TokenVerifier:
         self._keys = keys if keys is not None else SigningKeys(issuer)
         self._leeway = leeway_seconds
 
+    @property
+    def audience(self) -> str:
+        """The ``aud`` every token must carry: your server's ``resource`` in keelie."""
+        return self._audience
+
     async def verify(self, token: str) -> Claims:
         """The claims of the token, or :class:`TokenRejected` with the reason."""
         try:

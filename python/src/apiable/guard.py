@@ -47,11 +47,22 @@ class Guard:
     one mount line serves the metadata, refuses a request with no token, and
     refuses a token that does not verify. Paths outside ``resource``, a CORS
     preflight (``OPTIONS``) and every request that is not HTTP pass untouched.
+
+    The verifier's audience must be the ``resource`` of the metadata, or the guard
+    does not start. An agent asks keelie for a token with that ``resource`` (RFC
+    8707), and keelie writes your org's ``resource`` into ``aud``. A verifier for
+    another audience would refuse every such token, or accept a token for another
+    server. Set your org's ``resource`` in keelie to the same value.
     """
 
     def __init__(
         self, app: ASGIApp, verifier: TokenVerifier, metadata: ProtectedResourceMetadata
     ) -> None:
+        if verifier.audience != metadata.resource:
+            raise ValueError(
+                f"the verifier's audience {verifier.audience!r} is not the resource "
+                f"{metadata.resource!r}: give both the same value"
+            )
         self._app = app
         self._verifier = verifier
         self._metadata = metadata

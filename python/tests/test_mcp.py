@@ -7,9 +7,10 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
-from support import ISSUER, signed_token
+from support import ISSUER, ORG_ID, Clock, Issuer, signed_token
 
 from apiable import McpGuard, ProtectedResourceMetadata, TokenVerifier, UsageReporter
+from apiable.keys import SigningKeys
 from apiable.discovery import Receive, Scope, Send
 from apiable.mcp import INSUFFICIENT_SCOPE, INVALID_PARAMS, INVALID_REQUEST, PARSE_ERROR
 
@@ -101,8 +102,16 @@ async def client(
         yield client
 
 
+@pytest.fixture
+def verifier(issuer: Issuer, clock: Clock) -> TokenVerifier:
+    """The MCP server's verifier: its audience is the MCP endpoint, its ``resource``."""
+    client = httpx.AsyncClient(transport=httpx.MockTransport(issuer.handler))
+    keys = SigningKeys(ISSUER, client=client, clock=clock)
+    return TokenVerifier(ISSUER, RESOURCE, ORG_ID, keys=keys)
+
+
 def _auth(key: RSAPrivateKey, scope: str = "orders:read orders:write") -> dict[str, str]:
-    return {"Authorization": f"Bearer {signed_token(key, scope=scope)}"}
+    return {"Authorization": f"Bearer {signed_token(key, scope=scope, aud=RESOURCE)}"}
 
 
 def _call(tool: object, request_id: object = 7) -> bytes:
