@@ -16,7 +16,7 @@ from apiable import (
     UsageReporter,
 )
 from apiable.catalog import KEELIE_PATH
-from apiable.discovery import ASGIApp, Receive, Scope, Send
+from apiable.discovery import ARD_PATH, CATALOG_PATH, ASGIApp, Receive, Scope, Send
 
 KEELIE = "https://keelie.example.test"
 # A resource at the root: every path is under it, so the guards must let the catalog pass.
@@ -63,29 +63,36 @@ def _guarded(
     return McpGuard(catalog, verifier, metadata, {}, reporter=reporter)
 
 
-async def _get(app: ASGIApp, method: str = "GET") -> httpx.Response:
+async def _get(app: ASGIApp, method: str = "GET", path: str = CATALOG_PATH) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url=RESOURCE) as client:
-        return await client.request(method, "/.well-known/ai-catalog.json")
+        return await client.request(method, path)
 
 
 @pytest.mark.parametrize("guard", ["challenge", "rest", "mcp"])
-async def test_the_catalog_is_keelies_document_with_no_token(guard: str) -> None:
+@pytest.mark.parametrize(
+    ("path", "media_type"),
+    [(ARD_PATH, "application/json"), (CATALOG_PATH, "application/ai-catalog+json")],
+)
+async def test_the_catalog_is_keelies_document_with_no_token(
+    guard: str, path: str, media_type: str
+) -> None:
     keelie = Keelie()
 
-    response = await _get(_guarded(keelie, Clock(), guard))
+    response = await _get(_guarded(keelie, Clock(), guard), path=path)
 
     assert response.status_code == 200
-    assert response.headers["content-type"] == "application/ai-catalog+json"
+    assert response.headers["content-type"] == media_type
     assert response.content == keelie.body
     assert response.headers["cache-control"] == "max-age=60"
     assert keelie.paths == [KEELIE_PATH]
 
 
-async def test_head_answers_the_length_and_no_body() -> None:
+@pytest.mark.parametrize("path", [ARD_PATH, CATALOG_PATH])
+async def test_head_answers_the_length_and_no_body(path: str) -> None:
     keelie = Keelie()
 
-    response = await _get(_guarded(keelie, Clock(), "rest"), "HEAD")
+    response = await _get(_guarded(keelie, Clock(), "rest"), "HEAD", path)
 
     assert response.status_code == 200
     assert response.content == b""
@@ -107,6 +114,17 @@ async def test_a_copy_is_kept_for_60_seconds_and_no_longer() -> None:
     assert cached.content == b'{"specVersion":"1.0","entries":[]}'
     # A plan published in keelie shows within 60 seconds.
     assert fresh.content == keelie.body
+
+
+async def test_both_paths_serve_one_copy() -> None:
+    keelie = Keelie()
+    app = _guarded(keelie, Clock(), "rest")
+
+    ard = await _get(app, path=ARD_PATH)
+    catalog = await _get(app, path=CATALOG_PATH)
+
+    assert ard.content == catalog.content == keelie.body
+    assert keelie.paths == [KEELIE_PATH]
 
 
 @pytest.mark.parametrize("failure", [503, httpx.ConnectError("down")], ids=["503", "network"])
@@ -166,16 +184,18 @@ async def test_any_client_failure_is_a_503_with_the_same_back_off() -> None:
     assert auth.calls == 1
 
 
+@pytest.mark.parametrize("path", [ARD_PATH, CATALOG_PATH])
 @pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
-async def test_another_method_on_the_catalog_path_needs_a_token(method: str) -> None:
-    response = await _get(_guarded(Keelie(), Clock(), "rest"), method)
+async def test_another_method_on_the_catalog_path_needs_a_token(method: str, path: str) -> None:
+    response = await _get(_guarded(Keelie(), Clock(), "rest"), method, path)
 
     assert response.status_code == 401
 
 
-async def test_a_guard_with_no_catalog_guards_the_catalog_path() -> None:
+@pytest.mark.parametrize("path", [ARD_PATH, CATALOG_PATH])
+async def test_a_guard_with_no_catalog_guards_the_catalog_path(path: str) -> None:
     app = MissingTokenChallenge(_provider, ProtectedResourceMetadata(RESOURCE, ISSUER))
 
-    response = await _get(app)
+    response = await _get(app, path=path)
 
     assert response.status_code == 401

@@ -1,4 +1,9 @@
-"""Serve your AI Catalog from your own domain, at ``/.well-known/ai-catalog.json``.
+"""Serve your AI Catalog from your own domain.
+
+The catalog is at ``/.well-known/ard.json``, where ARD v0.91 looks for it, and at
+``/.well-known/ai-catalog.json``, where the ai-catalog specification looks and an
+MCP proposal points.
+Both paths serve the same body, from the same copy.
 
 keelie builds the catalog from your published plans. :class:`AiCatalog` fetches
 it from keelie with your credential, keeps it for 60 seconds, and serves it with
@@ -20,7 +25,7 @@ from typing import Callable
 import httpx
 
 from apiable.discovery import (
-    CATALOG_PATH,
+    CATALOG_MEDIA_TYPES,
     ASGIApp,
     ProtectedResourceMetadata,
     Receive,
@@ -34,13 +39,14 @@ logger = logging.getLogger(__name__)
 # The one place that names keelie's catalog endpoint.
 KEELIE_PATH = "/ai-catalog"
 
-MEDIA_TYPE = b"application/ai-catalog+json"
 CACHE_SECONDS = 60.0
 RETRY_SECONDS = 10.0
 
 
 class AiCatalog:
-    """Serves the catalog at ``/.well-known/ai-catalog.json``. Other requests pass untouched.
+    """Serves the catalog at ``/.well-known/ard.json`` and ``/.well-known/ai-catalog.json``.
+
+    Other requests pass untouched.
 
     ``client`` carries keelie's base URL and the auth of a credential that may
     read products, as for :class:`~apiable.UsageReporter`. It does not close it.
@@ -51,7 +57,7 @@ class AiCatalog:
         app.add_middleware(AiCatalog, client=client, metadata=metadata)
 
     Making it with ``metadata`` tells the token guards to let a GET or a HEAD
-    of the catalog path pass with no token. Without it, they guard the path like
+    of the two catalog paths pass with no token. Without it, they guard the path like
     any other. The order of the middleware does not matter.
     """
 
@@ -75,9 +81,10 @@ class AiCatalog:
         self._lock: asyncio.Lock | None = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        media_type = CATALOG_MEDIA_TYPES.get(scope.get("path"))  # type: ignore[arg-type]
         if (
             scope["type"] != "http"
-            or scope.get("path") != CATALOG_PATH
+            or media_type is None
             or scope.get("method") not in ("GET", "HEAD")
         ):
             await self._app(scope, receive, send)
@@ -88,7 +95,7 @@ class AiCatalog:
             headers = [(b"retry-after", b"10"), (b"cache-control", b"no-store")]
             await respond(send, 503, headers, b"", head=head)
             return
-        headers = [(b"content-type", MEDIA_TYPE), (b"cache-control", b"max-age=60")]
+        headers = [(b"content-type", media_type), (b"cache-control", b"max-age=60")]
         await respond(send, 200, headers, body, head=head)
 
     async def _catalog(self) -> bytes | None:

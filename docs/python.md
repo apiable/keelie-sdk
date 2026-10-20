@@ -269,8 +269,12 @@ with no token. It does not verify a token. Use it alone only if you verify token
 
 ## `AiCatalog`
 
-ASGI middleware that serves your AI Catalog at `/.well-known/ai-catalog.json`, on your own domain.
-keelie builds the catalog from your published plans.
+ASGI middleware that serves your AI Catalog on your own domain, at two paths:
+
+- `/.well-known/ard.json`, where an ARD consumer must look (ARD v0.91, section 5.1).
+- `/.well-known/ai-catalog.json`, where the ai-catalog specification looks and an MCP proposal points.
+
+Both paths serve the same body, from one copy. keelie builds the catalog from your published plans.
 
 ```python
 AiCatalog(app, client: httpx.AsyncClient, metadata: ProtectedResourceMetadata)
@@ -281,11 +285,12 @@ app.add_middleware(AiCatalog, client=keelie, metadata=metadata)
 ```
 
 `client` is the same keelie client as for `UsageReporter`. `metadata` is the one your guard uses.
-With it, the guard lets a `GET` or `HEAD` of the catalog pass with no token.
+With it, the guard lets a `GET` or `HEAD` of either catalog path pass with no token. Any other
+method on those paths is guarded like any other path.
 
 | Case | Answer |
 |---|---|
-| A copy younger than 60 seconds | `200`, `Content-Type: application/ai-catalog+json`, `Cache-Control: max-age=60` |
+| A copy younger than 60 seconds | `200`, `Cache-Control: max-age=60`. `Content-Type: application/json` at `ard.json`, `application/ai-catalog+json` at `ai-catalog.json` |
 | keelie does not answer, or answers with an error | `503`, `Retry-After: 10`. The SDK serves no copy older than 60 seconds. It asks keelie again after 10 seconds. |
 
 ---
