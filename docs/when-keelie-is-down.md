@@ -53,8 +53,8 @@ Nothing on the request path changes. Only the background work waits.
 - **Usage reports.** The SDK keeps each failed batch in memory, and sends it again every 5 seconds
   with the same idempotency key. keelie keeps each event once. The buffer holds 10,000 events.
   When it is full, the oldest event goes, with the log line `apiable.usage_dropped`.
-- **The AI Catalog.** The SDK serves its copy for 60 seconds at most. After that, the catalog
-  address answers `503` with `Retry-After: 10`, until keelie answers again.
+- **The AI Catalog.** The SDK serves its copy for 60 seconds at most. After that, both catalog
+  paths answer `503` with `Retry-After: 10`, until keelie answers again.
 
 The SDK writes nothing to disk. Events that wait in memory are lost if the process stops before
 keelie is back. `aclose()` tries to send them once at shutdown.
