@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import time
+import uuid
 from collections.abc import AsyncIterator
 from decimal import Decimal
 from typing import Callable, Union
@@ -12,7 +14,7 @@ import httpx
 import pytest
 
 from apiable import UsageReporter
-from apiable.usage import PATH
+from apiable.usage import KEELIE_OUTCOME_NAMESPACE, PATH
 
 BASE_URL = "https://keelie.example.test"
 CLIENT_ID = "consumer-client-1"
@@ -252,6 +254,11 @@ async def test_aclose_sends_what_is_left_and_takes_no_more(
         {"credits": -1},
         {"credits": Decimal(10) ** 9 + 1},
         {"credits": Decimal("NaN")},
+        # A step that carries the outcome's ID would take its key first.
+        {"unit": "request", "outcome_id": "job-1"},
+        # Each repeat of an outcome with no ID would burn the balance again.
+        {"unit": "outcome", "credits": 10},
+        {"unit": "outcome", "outcome_id": ""},
     ],
 )
 async def test_an_event_keelie_would_refuse_is_left_out(
@@ -282,3 +289,44 @@ async def test_aclose_gives_up_after_its_timeout(
     await reporter.aclose(timeout=0.05)
 
     assert "apiable.usage_dropped events=3 reason=closed" in caplog.text
+
+
+async def test_one_outcome_has_one_key_in_every_reporter(
+    keelie: Keelie, reporter_for: Callable[..., UsageReporter]
+) -> None:
+    # Two processes report the same outcome: keelie must see one key, and burn once.
+    first, second = reporter_for(), reporter_for()
+    for reporter in (first, second):
+        reporter.record(CLIENT_ID, "POST /videos", unit="outcome", credits=10, outcome_id="job-1")
+    first.record(CLIENT_ID, "POST /videos", unit="outcome", credits=10, outcome_id="job-2")
+    # A step before the outcome costs nothing, and needs no ID.
+    first.record(CLIENT_ID, "POST /videos", unit="outcome", credits=0)
+    await first.aclose()
+    await second.aclose()
+
+    keys = [[event["idempotency_key"] for event in batch] for batch in keelie.batches()]
+    job_1 = str(uuid.uuid5(KEELIE_OUTCOME_NAMESPACE, "job-1"))
+    assert keys[0][0] == job_1
+    assert keys[1] == [job_1]
+    assert keys[0][1] == str(uuid.uuid5(KEELIE_OUTCOME_NAMESPACE, "job-2"))
+    assert uuid.UUID(keys[0][2]).version == 4
+
+
+def test_a_sync_background_job_sends_its_outcome(keelie: Keelie) -> None:
+    """A worker with no event loop, such as a Celery task, as the quickstart shows it."""
+
+    async def job() -> None:
+        async with httpx.AsyncClient(
+            base_url=BASE_URL, transport=httpx.MockTransport(keelie.handler)
+        ) as client:
+            reporter = UsageReporter(client)
+            await reporter.start()
+            reporter.record(CLIENT_ID, "POST /videos", unit="outcome", credits=10, outcome_id="j")
+            await reporter.aclose()
+
+    # In a thread of its own: the worker has no running loop of the test's.
+    worker = threading.Thread(target=asyncio.run, args=(job(),))
+    worker.start()
+    worker.join()
+
+    assert [len(batch) for batch in keelie.batches()] == [1]

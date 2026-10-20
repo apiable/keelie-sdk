@@ -12,6 +12,11 @@ Each event carries its own idempotency key, and each batch carries an
 ``Idempotency-Key``. A batch that fails on the way is sent again later with the
 same key and the same body, so keelie keeps each event once.
 
+An outcome is charged once. ``record(..., unit="outcome", outcome_id=...)`` makes
+the event's key from the outcome ID, with :data:`KEELIE_OUTCOME_NAMESPACE`. The
+same outcome then has the same key on every repeat, in every process and in
+every language, and keelie keeps the key in every month. A repeat burns nothing.
+
 A report that fails never stops a request:
 
 - A network error, a ``401``, ``408``, ``409``, ``429`` or a ``5xx`` keeps the
@@ -50,6 +55,13 @@ logger = logging.getLogger(__name__)
 PATH = "/usage-events:report"
 
 UNITS = frozenset({"request", "tool_call", "token", "outcome"})
+OUTCOME = "outcome"
+
+# The namespace of an outcome's key: ``uuid5(KEELIE_OUTCOME_NAMESPACE, outcome_id)``.
+# Fixed for good. A UUIDv5 and not a random key: the key must be the same on every
+# repeat of the outcome, so that keelie charges it once. Another language makes the
+# same key from this value.
+KEELIE_OUTCOME_NAMESPACE = uuid.UUID("a29fa190-9b27-5a07-a1ba-3a0902a3bdcc")
 
 # What keelie takes in one event, and in one batch.
 MAX_NAME_LENGTH = 255
@@ -121,12 +133,19 @@ class UsageReporter:
         unit: str = "request",
         quantity: Amount = 1,
         credits: Amount | None = None,
+        outcome_id: str | None = None,
     ) -> None:
         """Put one event in the buffer, and return at once.
 
         ``client_id`` is the ``azp`` of the Consumer's token. ``capability_key``
         names the route or the tool that was called. ``credits`` is what the
         call costs the Consumer's balance; leave it out when the call is free.
+
+        ``outcome_id`` names the outcome of a ``unit="outcome"`` event, such as
+        the ID of the job. It must be unique across all your Consumers. The
+        event's key is made from it, so keelie charges the outcome once, however
+        often it is reported. An outcome with credits needs it. Any other unit
+        must not have it.
 
         It never raises and never waits. An event keelie would refuse is logged
         and left out, so it cannot cost the other events of its batch.
@@ -146,12 +165,21 @@ class UsageReporter:
             reason = "quantity"
         elif credits is not None and cost is None:
             reason = "credits"
+        elif outcome_id is not None and (unit != OUTCOME or not _name_ok(outcome_id)):
+            reason = "outcome_id"
+        elif outcome_id is None and unit == OUTCOME and cost is not None and Decimal(cost) > 0:
+            # Without the ID, each repeat of the outcome would burn the balance again.
+            reason = "outcome_id"
         if reason is not None:
             # A fixed word: the value can come from the request, and stays out of the log.
             logger.warning("apiable.usage_event_invalid reason=%s", reason)
             return
         event: _EventBody = {
-            "idempotency_key": str(uuid.uuid4()),
+            "idempotency_key": str(
+                uuid.uuid4()
+                if outcome_id is None
+                else uuid.uuid5(KEELIE_OUTCOME_NAMESPACE, outcome_id)
+            ),
             "client_id": client_id,
             "capability_key": capability_key,
             "unit": unit,

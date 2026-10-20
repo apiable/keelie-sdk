@@ -323,7 +323,7 @@ UsageReporter(
 
 Make one reporter for the process.
 
-### `reporter.record(client_id, capability_key, *, unit="request", quantity=1, credits=None) -> None`
+### `reporter.record(client_id, capability_key, *, unit="request", quantity=1, credits=None, outcome_id=None) -> None`
 
 Puts one event in memory and returns at once. It does no I/O and never raises.
 
@@ -334,9 +334,45 @@ Puts one event in memory and returns at once. It does no I/O and never raises.
 | `unit` | `request`, `tool_call`, `token` or `outcome`. |
 | `quantity` | How many units. An `int` or a `Decimal`, more than 0, at most six decimal places. |
 | `credits` | What the call costs the Consumer's balance. Leave it out when the call is free. |
+| `outcome_id` | The ID of the outcome, such as the ID of the job. Only with `unit="outcome"`. Required when the outcome has credits. 255 characters at most. |
 
 An event that keelie would refuse is logged and left out. It cannot cost the other events of its
 batch.
+
+#### Charge an outcome once
+
+With a price on an outcome, the steps before it report 0 credits, and the outcome reports the
+price. The call that completes an outcome can repeat: a retry, a second status request, a second
+download. Give each outcome its ID, and keelie charges it once.
+
+```python
+reporter.record(claims.azp, "POST /videos", credits=0)  # a step
+reporter.record(claims.azp, "POST /videos", unit="outcome", credits=50, outcome_id=str(job.id))
+```
+
+> **Warning:** do not give a step the outcome's ID. The step then takes the outcome's key, and
+> keelie charges the outcome 0.
+
+- The SDK makes the event's key from the ID: `uuid5(KEELIE_OUTCOME_NAMESPACE, outcome_id)`, with
+  `KEELIE_OUTCOME_NAMESPACE = a29fa190-9b27-5a07-a1ba-3a0902a3bdcc` (in `apiable.usage`).
+- keelie keeps the key of each outcome in every month. A repeat with the same key is a duplicate.
+  It burns nothing.
+- **The ID must be unique across all your Consumers.** keelie compares keys across your whole
+  account. Use the job's UUID, not a number that starts again for each Consumer.
+- `outcome_id` is a `str`. `record()` leaves out an outcome with credits and no ID, and an ID on a
+  unit other than `outcome`.
+
+**Why a UUIDv5 and not a UUIDv7.** The key must be deterministic. The same outcome must give the
+same key on every retry, in every process and in every language. A UUIDv7 is new on each call, so a
+repeat would get a new key and burn the balance again. If you report from another language, make
+the key the same way: a UUIDv5 of the ID, in the namespace above.
+
+#### Report an outcome with no request
+
+When the outcome finishes in the background, no request is running. Keep the Consumer's
+`claims.azp` with the job when it starts, and record the outcome from the job with that value. The
+reporter uses your SDK credential, as it does for every event. The
+[quickstart](quickstart.md#report-an-outcome-from-a-background-job) has an example.
 
 ### `await reporter.start() -> None`
 
