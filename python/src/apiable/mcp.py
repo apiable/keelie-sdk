@@ -193,7 +193,9 @@ class McpGuard(Guard):
             if message["type"] == "http.response.start":
                 status = message.get("status")
                 if isinstance(status, int) and 200 <= status < 300:
-                    self._reporter.record(claims.azp, tool, unit="tool_call")
+                    self._reporter.record(
+                        claims.azp, tool, unit="tool_call", consumer_id=claims.consumer_id
+                    )
             await send(message)
 
         return counted

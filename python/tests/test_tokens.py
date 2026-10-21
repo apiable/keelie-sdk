@@ -299,3 +299,25 @@ async def test_the_claims_say_when_the_token_expires(
     claims = await verifier.verify(signed_token(signing_key, exp=exp))
 
     assert claims.expires_at == datetime.fromtimestamp(exp, timezone.utc)
+
+
+async def test_a_token_for_a_person_names_its_consumer(
+    verifier: TokenVerifier, signing_key: RSAPrivateKey
+) -> None:
+    consumer = uuid.uuid4()
+
+    person = await verifier.verify(signed_token(signing_key, consumer_id=str(consumer)))
+    credential = await verifier.verify(signed_token(signing_key))
+
+    assert person.consumer_id == consumer
+    assert credential.consumer_id is None
+
+
+@pytest.mark.parametrize("consumer_id", ["not-a-uuid", 42])
+async def test_a_consumer_id_that_is_no_uuid_is_refused(
+    verifier: TokenVerifier, signing_key: RSAPrivateKey, consumer_id: object
+) -> None:
+    with pytest.raises(TokenRejected) as rejected:
+        await verifier.verify(signed_token(signing_key, consumer_id=consumer_id))
+
+    assert rejected.value.reason == "claims"
