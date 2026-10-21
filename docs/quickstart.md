@@ -185,7 +185,9 @@ async def insufficient_scope(request: Request, exc: InsufficientScope) -> Respon
 async def read_order(order_id: str, request: Request) -> dict[str, str]:
     claims = request.state.apiable_claims
     scopes.check(claims, "GET", "/v1/orders/{order_id}")  # raises InsufficientScope
-    reporter.record(claims.azp, "GET /v1/orders/{order_id}", credits=1)
+    reporter.record(
+        claims.azp, "GET /v1/orders/{order_id}", credits=1, consumer_id=claims.consumer_id
+    )
     return {"order_id": order_id}
 ```
 
@@ -197,6 +199,8 @@ What each line does:
   answers `InsufficientScope` with `403`.
 - `reporter.record` puts one usage event in memory and returns at once. A background task sends
   the events to keelie every 5 seconds. `credits` is what the call costs the Consumer.
+  `consumer_id` names the Consumer on a token for a person, whose `azp` is an agent's client. On a
+  credential's token it is `None`.
 
 ## 6. Check it
 
@@ -239,8 +243,8 @@ The answer is `{"order_id": "42"}`. Within 5 seconds, the SDK reports the call t
 ## Report an outcome from a background job
 
 With a price on an outcome, the work can finish after the request that started it. Keep the
-Consumer's `claims.azp` with the job, and report the outcome from the job. Your SDK credential
-sends the report. `outcome_id` makes keelie charge the outcome once, also when the job reports it
+Consumer's `claims.azp` and `claims.consumer_id` with the job, and report the outcome from the
+job. Your SDK credential sends the report. `outcome_id` makes keelie charge the outcome once, also when the job reports it
 again ([Charge an outcome once](python.md#charge-an-outcome-once)).
 
 In an async worker, make one reporter for the worker. Call `start()` when the worker starts and
@@ -249,7 +253,14 @@ In an async worker, make one reporter for the worker. Call `start()` when the wo
 ```python
 async def finish_video(job: Job) -> None:
     ...  # the work
-    reporter.record(job.azp, "POST /videos", unit="outcome", credits=50, outcome_id=str(job.id))
+    reporter.record(
+        job.azp,
+        "POST /videos",
+        unit="outcome",
+        credits=50,
+        outcome_id=str(job.id),
+        consumer_id=job.consumer_id,
+    )
 ```
 
 A sync worker, such as a Celery task, has no event loop. `record()` alone does not send the event
@@ -281,7 +292,14 @@ async def report_outcome(job: Job) -> None:
     ) as keelie:
         reporter = UsageReporter(keelie)
         await reporter.start()
-        reporter.record(job.azp, "POST /videos", unit="outcome", credits=50, outcome_id=str(job.id))
+        reporter.record(
+            job.azp,
+            "POST /videos",
+            unit="outcome",
+            credits=50,
+            outcome_id=str(job.id),
+            consumer_id=job.consumer_id,
+        )
         await reporter.aclose()
 ```
 

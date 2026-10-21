@@ -121,6 +121,7 @@ A frozen dataclass.
 | `scopes` | `frozenset[str]` | The scopes of the token. |
 | `jti` | `str \| None` | The token id. Log it. Never log the token. |
 | `expires_at` | `datetime` | When the token expires, from `exp`, in UTC. |
+| `consumer_id` | `UUID \| None` | On a token for a person, the Consumer whose credits the person uses. `azp` is then the agent's client, which serves every Consumer. `None` on a credential's token. A value that is not a UUID refuses the token with `claims`. Report usage with it. |
 
 ---
 
@@ -323,18 +324,36 @@ UsageReporter(
 
 Make one reporter for the process.
 
-### `reporter.record(client_id, capability_key, *, unit="request", quantity=1, credits=None, outcome_id=None) -> None`
+### `reporter.record(client_id, capability_key, *, unit="request", quantity=1, credits=None, outcome_id=None, consumer_id=None) -> None`
 
 Puts one event in memory and returns at once. It does no I/O and never raises.
 
 | Argument | Value |
 |---|---|
-| `client_id` | `claims.azp`: the Consumer's credential. |
+| `client_id` | `claims.azp`: the Consumer's credential, or the agent's client on a token for a person. |
 | `capability_key` | The route or the tool that was called, such as `GET /orders/{order_id}`. 255 characters at most. |
 | `unit` | `request`, `tool_call`, `token` or `outcome`. |
 | `quantity` | How many units. An `int` or a `Decimal`, more than 0, at most six decimal places. |
 | `credits` | What the call costs the Consumer's balance. Leave it out when the call is free. |
 | `outcome_id` | The ID of the outcome, such as the ID of the job. Only with `unit="outcome"`. Required when the outcome has credits. 255 characters at most. |
+| `consumer_id` | `claims.consumer_id`. Always pass it. A `UUID` or its `str`. It is `None` on a credential's token, and nothing is sent. |
+
+#### Report use under a token for a person
+
+An agent, such as Claude, acts for a person with a token for that person. Its `azp` is the agent's
+client, which serves every Consumer. The token names the Consumer in `consumer_id`. Pass it with
+each event, and keelie burns that Consumer's credits:
+
+```python
+reporter.record(claims.azp, "GET /orders/{order_id}", credits=1, consumer_id=claims.consumer_id)
+```
+
+- keelie refuses the whole batch, with `consumer-unknown`, when an event of an agent's client has no
+  `consumer_id`, or when the Consumer does not have exactly one live subscription. The SDK drops a
+  refused batch. So always pass `claims.consumer_id`. On a credential's token it is `None`, which is
+  correct there.
+- A subscription canceled after the call and before the report refuses the batch too.
+- `McpGuard` passes `claims.consumer_id` with each tool call for you.
 
 An event that keelie would refuse is logged and left out. It cannot cost the other events of its
 batch.
@@ -370,7 +389,7 @@ the key the same way: a UUIDv5 of the ID, in the namespace above.
 #### Report an outcome with no request
 
 When the outcome finishes in the background, no request is running. Keep the Consumer's
-`claims.azp` with the job when it starts, and record the outcome from the job with that value. The
+`claims.azp` and `claims.consumer_id` with the job when it starts, and record the outcome from the job with that value. The
 reporter uses your SDK credential, as it does for every event. The
 [quickstart](quickstart.md#report-an-outcome-from-a-background-job) has an example.
 

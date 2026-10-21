@@ -78,6 +78,11 @@ class Claims:
     # When the token expires, from ``exp``, in UTC. While keelie is down, the
     # Consumer is served until then, and refused after.
     expires_at: datetime
+    # On a token for a person, the Consumer whose credits the person uses: the
+    # ``consumer_id`` claim. ``azp`` is then the agent's client, which serves every
+    # Consumer. ``None`` on a credential's token, which names its Consumer by ``azp``.
+    # Pass it to ``UsageReporter.record()`` with ``azp``.
+    consumer_id: UUID | None = None
 
 
 class TokenVerifier:
@@ -195,10 +200,16 @@ class TokenVerifier:
             expires_at = datetime.fromtimestamp(payload["exp"], timezone.utc)
         except (OverflowError, OSError, TypeError, ValueError) as exc:
             raise TokenRejected("claims") from exc
+        consumer = payload.get("consumer_id")
+        try:
+            consumer_id = None if consumer is None else UUID(consumer)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise TokenRejected("claims") from exc
         return Claims(
             azp=azp,
             org_id=org_id,
             scopes=frozenset(scope.split()),
             jti=jti,
             expires_at=expires_at,
+            consumer_id=consumer_id,
         )

@@ -259,6 +259,7 @@ async def test_aclose_sends_what_is_left_and_takes_no_more(
         # Each repeat of an outcome with no ID would burn the balance again.
         {"unit": "outcome", "credits": 10},
         {"unit": "outcome", "outcome_id": ""},
+        {"consumer_id": "not-a-uuid"},
     ],
 )
 async def test_an_event_keelie_would_refuse_is_left_out(
@@ -330,3 +331,20 @@ def test_a_sync_background_job_sends_its_outcome(keelie: Keelie) -> None:
     worker.join()
 
     assert [len(batch) for batch in keelie.batches()] == [1]
+
+
+async def test_the_consumer_of_a_token_for_a_person_is_sent_with_the_event(
+    keelie: Keelie, reporter_for: Callable[..., UsageReporter]
+) -> None:
+    reporter = reporter_for(batch_size=3, flush_interval_seconds=60)
+    consumer = uuid.uuid4()
+
+    reporter.record(CLIENT_ID, "search", consumer_id=consumer)
+    reporter.record(CLIENT_ID, "search", consumer_id=str(consumer).upper())
+    reporter.record(CLIENT_ID, "search", consumer_id=None)
+    await _until(lambda: len(keelie.requests) == 1)
+
+    first, second, third = keelie.batches()[0]
+    assert first["consumer_id"] == second["consumer_id"] == str(consumer)
+    assert "consumer_id" not in third
+    await reporter.aclose()

@@ -12,6 +12,11 @@ Each event carries its own idempotency key, and each batch carries an
 ``Idempotency-Key``. A batch that fails on the way is sent again later with the
 same key and the same body, so keelie keeps each event once.
 
+A token for a person names its Consumer in ``consumer_id``: its ``azp`` is an
+agent's client, which serves every Consumer. Pass ``claims.consumer_id`` to
+``record()`` with each event. keelie then burns that Consumer's credits. On a
+credential's token it is ``None``, and nothing is sent.
+
 An outcome is charged once. ``record(..., unit="outcome", outcome_id=...)`` makes
 the event's key from the outcome ID, with :data:`KEELIE_OUTCOME_NAMESPACE`. The
 same outcome then has the same key on every repeat, in every process and in
@@ -46,6 +51,7 @@ from collections import deque
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Union
+from uuid import UUID
 
 import httpx
 
@@ -134,6 +140,7 @@ class UsageReporter:
         quantity: Amount = 1,
         credits: Amount | None = None,
         outcome_id: str | None = None,
+        consumer_id: UUID | str | None = None,
     ) -> None:
         """Put one event in the buffer, and return at once.
 
@@ -147,6 +154,11 @@ class UsageReporter:
         often it is reported. An outcome with credits needs it. Any other unit
         must not have it.
 
+        ``consumer_id`` is ``claims.consumer_id``: the Consumer of a token for a
+        person, whose credits the call burns. Always pass it. It is ``None`` on a
+        credential's token: keelie refuses a ``consumer_id`` there. keelie refuses a
+        batch with an event of an agent's client that has no ``consumer_id``.
+
         It never raises and never waits. An event keelie would refuse is logged
         and left out, so it cannot cost the other events of its batch.
         """
@@ -154,6 +166,7 @@ class UsageReporter:
             return
         amount = _amount(quantity, positive=True)
         cost = None if credits is None else _amount(credits, positive=False)
+        consumer = None if consumer_id is None else _uuid(consumer_id)
         reason = None
         if not _name_ok(client_id):
             reason = "client_id"
@@ -170,6 +183,8 @@ class UsageReporter:
         elif outcome_id is None and unit == OUTCOME and cost is not None and Decimal(cost) > 0:
             # Without the ID, each repeat of the outcome would burn the balance again.
             reason = "outcome_id"
+        elif consumer_id is not None and consumer is None:
+            reason = "consumer_id"
         if reason is not None:
             # A fixed word: the value can come from the request, and stays out of the log.
             logger.warning("apiable.usage_event_invalid reason=%s", reason)
@@ -188,6 +203,8 @@ class UsageReporter:
         }
         if cost is not None:
             event["credits"] = cost
+        if consumer is not None:
+            event["consumer_id"] = str(consumer)
         if len(self._events) == self._events.maxlen:
             # The deque drops the oldest event to take this one.
             self._dropped += 1
@@ -304,6 +321,16 @@ class UsageReporter:
         if self._dropped:
             logger.warning("apiable.usage_dropped events=%d reason=buffer_full", self._dropped)
             self._dropped = 0
+
+
+def _uuid(value: object) -> UUID | None:
+    """``value`` as a UUID, or None when it is not one."""
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
 
 
 def _name_ok(name: str) -> bool:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from collections.abc import AsyncIterator
 
 import httpx
@@ -287,3 +288,21 @@ async def test_one_event_for_each_tool_call_the_server_accepts(
         ("client-1", "get_order", "tool_call")
     ] * counted
     assert all("credits" not in e for e in keelie.events)
+
+
+async def test_a_tool_call_under_a_token_for_a_person_names_its_consumer(
+    client: httpx.AsyncClient,
+    reporter: UsageReporter,
+    keelie: Keelie,
+    signing_key: RSAPrivateKey,
+) -> None:
+    consumer = uuid.uuid4()
+    token = signed_token(signing_key, aud=RESOURCE, consumer_id=str(consumer))
+
+    response = await client.post(
+        "/mcp", content=_call("get_order"), headers={"Authorization": f"Bearer {token}"}
+    )
+    await reporter.aclose()
+
+    assert response.status_code == 200
+    assert [e.get("consumer_id") for e in keelie.events] == [str(consumer)]
