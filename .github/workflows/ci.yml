@@ -1,6 +1,7 @@
 name: ci
 
-# The Python package's tests, on the oldest and the newest Python it supports. No publish step.
+# The tests of each package, on the oldest and the newest version of its language it supports.
+# No publish step.
 on:
   pull_request:
   push:
@@ -28,3 +29,25 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: uv sync --locked
       - run: uv run --locked pytest
+
+  dotnet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: ["net8.0", "net10.0"]
+    defaults:
+      run:
+        working-directory: dotnet
+    steps:
+      - uses: actions/checkout@v7
+      # Both SDKs: the .NET 10 SDK builds both targets, and each job runs the tests on one runtime.
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - run: dotnet restore --locked-mode
+      - run: dotnet build --no-restore -warnaserror
+      - run: dotnet test --no-build --framework ${{ matrix.framework }}
