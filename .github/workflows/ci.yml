@@ -1,6 +1,7 @@
 name: ci
 
-# The Python package's tests, on the oldest and the newest Python it supports. No publish step.
+# The tests of each package, on the oldest and the newest version of its language it supports.
+# No publish step.
 on:
   pull_request:
   push:
@@ -28,3 +29,27 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: uv sync --locked
       - run: uv run --locked pytest
+
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.24", "1.27"]
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: go/mcptest/go.sum
+      - run: go vet ./...
+      - run: go test -race ./...
+      # A real MCP client and server through the guard. A module of its own: the
+      # official MCP SDK needs Go 1.25, newer than the module's oldest.
+      - if: matrix.go != '1.24'
+        working-directory: go/mcptest
+        run: go vet ./... && go test -race ./...
