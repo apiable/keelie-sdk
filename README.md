@@ -5,6 +5,7 @@ tokens and scopes inside your own process, and it reports usage.
 
 > **Status: in development. The code here is not released, and it has no stable API yet.**
 > The first release is for Python and any ASGI framework, such as FastAPI. Other languages follow.
+> A Ruby gem, for any Rack app with a scope check for Rails, is in development in [`ruby/`](ruby/).
 > Everything that ships is published here, under the Apache License 2.0, so that you can read what
 > runs in your process instead of taking our word for it.
 
@@ -14,6 +15,7 @@ tokens and scopes inside your own process, and it reports usage.
 |---|---|
 | [Quickstart](docs/quickstart.md) | From signup to a protected route, on one page. |
 | [Python SDK reference](docs/python.md) | Every class, its arguments, its return value and its errors. |
+| [Ruby SDK reference](docs/ruby.md) | The Ruby gem, for Rack and Rails, and where it differs from Python. |
 | [When keelie is down](docs/when-keelie-is-down.md) | What the SDK does in each failure. |
 
 **You can use keelie without this SDK.** The token is a standard JWT, and the usage API is plain
@@ -44,6 +46,7 @@ with each keelie release.
 | Folder | What it holds |
 |---|---|
 | [`python/`](python/) | The Python package `apiable`. On PyPI today it is a placeholder that reserves the name. |
+| [`ruby/`](ruby/) | The Ruby gem `keelie`. Not on RubyGems yet. |
 | [`docs/`](docs/) | The documentation. |
 
 ## Security

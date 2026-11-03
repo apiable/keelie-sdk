@@ -6,6 +6,9 @@ with a Consumer's token gets your answer.
 
 You need Python 3.9 or later, an API on FastAPI or another ASGI framework, `curl` and `jq`.
 
+> **Ruby:** on Rails or another Rack app, follow steps 1 and 2 here, then the
+> [Ruby reference](ruby.md#get-started-with-rails) from step 3.
+
 ## 1. Sign up
 
 Set the address of keelie and of its issuer once. The examples below read them.
@@ -311,6 +314,7 @@ with the same `outcome_id`: keelie burns it once.
 ## Next
 
 - [Python SDK reference](python.md): every class, its arguments, its return value and its errors.
+- [Ruby SDK reference](ruby.md): the Ruby gem, for Rack and Rails.
 - [When keelie is down](when-keelie-is-down.md): what the SDK does in each failure.
 
 ## The keelie contract
