@@ -5,6 +5,7 @@ SDK, configure it, and protect one route. At the end, a call with no token gets 
 with a Consumer's token gets your answer.
 
 You need Python 3.9 or later, an API on FastAPI or another ASGI framework, `curl` and `jq`.
+On Node and Express, do steps 1 and 2 here, then follow the [Node reference](node.md#get-started-with-express).
 
 The SDK needs https for your API and for the issuer. Test it against a hosted keelie, not a local
 stack, which serves plain http.
@@ -314,6 +315,7 @@ with the same `outcome_id`: keelie burns it once.
 ## Next
 
 - [Python SDK reference](python.md): every class, its arguments, its return value and its errors.
+- [Node SDK reference](node.md): the same for Node and Express.
 - [When keelie is down](when-keelie-is-down.md): what the SDK does in each failure.
 
 ## The keelie contract
