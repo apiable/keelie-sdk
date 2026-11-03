@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": ".test-build",
+    // The MCP SDK's types do not hold under this flag. The package's own build keeps it.
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["src", "test"]
+}
