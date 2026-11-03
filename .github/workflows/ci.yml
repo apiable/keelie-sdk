@@ -1,6 +1,7 @@
 name: ci
 
-# The Python package's tests, on the oldest and the newest Python it supports. No publish step.
+# The tests of each package, on the oldest and the newest version of its language it supports.
+# No publish step.
 on:
   pull_request:
   push:
@@ -28,3 +29,22 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: uv sync --locked
       - run: uv run --locked pytest
+
+  ruby:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["3.2", "4.0"]
+    defaults:
+      run:
+        working-directory: ruby
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1.331.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          working-directory: ruby
+          bundler-cache: true
+      - run: bundle exec rake test
