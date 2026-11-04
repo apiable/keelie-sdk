@@ -158,8 +158,11 @@ def _signing_keys(key_set: object) -> dict[str, jwt.PyJWK]:
             or jwk.get("alg") not in (None, ALGORITHM)
         ):
             continue
+        # Only the public part is read. A key published with its private member `d`
+        # by mistake would otherwise load as a private key, which cannot verify.
+        public = {name: jwk[name] for name in ("kty", "kid", "n", "e") if name in jwk}
         try:
-            keys[jwk["kid"]] = jwt.PyJWK(jwk, algorithm=ALGORITHM)
+            keys[jwk["kid"]] = jwt.PyJWK(public, algorithm=ALGORITHM)
         except (jwt.PyJWTError, ValueError):
             # A key the SDK cannot load is skipped. The rest of the set loads.
             logger.warning("apiable.key_skipped kid=%s", jwk["kid"])

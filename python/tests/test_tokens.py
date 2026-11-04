@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from collections.abc import Callable
@@ -181,6 +182,21 @@ async def test_a_key_with_no_use_and_no_alg_verifies(
     claims = await verifier.verify(signed_token(signing_key, kid="bare"))
 
     assert claims.azp == "client-1"
+
+
+async def test_a_key_published_with_its_private_part_still_verifies(clock: Clock) -> None:
+    signing_key = private_key()
+    issuer = Issuer()
+    private = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key))
+    issuer.keys = [{**private, "kid": "sig-1", "use": "sig", "alg": "RS256"}]
+    assert "d" in issuer.keys[0]
+    verifier = _verifier_for(issuer, clock)
+
+    claims = await verifier.verify(signed_token(signing_key))
+
+    assert claims.azp == "client-1"
+    with pytest.raises(TokenRejected):
+        await verifier.verify(signed_token(private_key()))
 
 
 REALM_A = "https://issuer.example.test/realms/01890000-0000-7000-8000-00000000000a"
