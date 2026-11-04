@@ -347,6 +347,11 @@ def _amount(value: Amount, *, positive: bool) -> str | None:
         return None
     if (positive and number == 0) or number != number.quantize(_PLACE):
         return None
+    # Zeros past the sixth place pass the check above but keelie counts them as places:
+    # 0.0000010 is sent as 0.000001. An amount with six places or fewer is sent as given.
+    exponent = number.as_tuple().exponent
+    if isinstance(exponent, int) and exponent < -6:
+        number = number.quantize(_PLACE)
     return format(number, "f")
 
 

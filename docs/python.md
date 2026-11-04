@@ -333,7 +333,7 @@ Puts one event in memory and returns at once. It does no I/O and never raises.
 | `client_id` | `claims.azp`: the Consumer's credential, or the agent's client on a token for a person. |
 | `capability_key` | The route or the tool that was called, such as `GET /orders/{order_id}`. 255 characters at most. |
 | `unit` | `request`, `tool_call`, `token` or `outcome`. |
-| `quantity` | How many units. An `int` or a `Decimal`, more than 0, at most six decimal places. |
+| `quantity` | How many units. An `int` or a `Decimal`, more than 0, at most six decimal places. Zeros past the sixth are dropped: `Decimal("0.0000010")` is sent as `0.000001`. |
 | `credits` | What the call costs the Consumer's balance. Leave it out when the call is free. |
 | `outcome_id` | The ID of the outcome, such as the ID of the job. Only with `unit="outcome"`. Required when the outcome has credits. 255 characters at most. |
 | `consumer_id` | `claims.consumer_id`. Always pass it. A `UUID` or its `str`. It is `None` on a credential's token, and nothing is sent. |
@@ -427,7 +427,7 @@ token or a secret.
 | `apiable.keys_loaded` | INFO | The SDK fetched the issuer's key set. |
 | `apiable.keys_unavailable` | WARNING | The SDK holds no key set and could not fetch one. Every token is refused. |
 | `apiable.keys_not_refreshed` | WARNING | A fetch failed. The keys in hand go on verifying. |
-| `apiable.key_skipped` | WARNING | The SDK could not load one key of the set. The rest of the set loads. |
+| `apiable.key_skipped` | WARNING | The SDK could not load one key of the set. The rest of the set loads. Only a key's public part is read, so a key published with its private part still loads. |
 | `apiable.mcp_refused` | INFO | `McpGuard` refused a request. |
 | `apiable.usage_event_invalid reason=...` | WARNING | `record()` left out an event that keelie would refuse. |
 | `apiable.usage_not_sent` | WARNING | A batch failed and waits for a retry. |
