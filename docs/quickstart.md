@@ -6,6 +6,9 @@ with a Consumer's token gets your answer.
 
 You need Python 3.9 or later, an API on FastAPI or another ASGI framework, `curl` and `jq`.
 
+The SDK needs https for your API and for the issuer. Test it against a hosted keelie, not a local
+stack, which serves plain http.
+
 ## 1. Sign up
 
 Set the address of keelie and of its issuer once. The examples below read them.
