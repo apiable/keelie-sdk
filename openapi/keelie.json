@@ -1880,7 +1880,7 @@
             "type": "string"
           },
           "default_ttl_seconds": {
-            "description": "How long a token of this plan lives when the balance is healthy. A credential may ask for less, never for more. No plan mints a token longer than thirty minutes.",
+            "description": "How long a token of this plan lives when the balance is healthy. A credential may ask for less, never for more. No plan mints a token longer than thirty minutes. It is never below the shortest token of the Provider's plan with Apiable. On PAYG that is 1800 seconds too.",
             "examples": [
               1800
             ],
@@ -7658,7 +7658,7 @@
                   "summary": "The same plan with the fee and the quantity at zero",
                   "value": {
                     "currency": "usd",
-                    "default_ttl_seconds": 900,
+                    "default_ttl_seconds": 1800,
                     "name": "Pay as you go",
                     "pricing": {
                       "credit_packs": [
@@ -7783,7 +7783,7 @@
                 }
               }
             },
-            "description": "The plan is not one keelie will write. `type` says which rule it broke — `capability-unknown` when a scope points at a route this product does not sell."
+            "description": "The plan is not one keelie will write. `type` says which rule it broke — `capability-unknown` when a scope points at a route this product does not sell. `token-lifetime-below-floor` when `default_ttl_seconds` is below the shortest token the Provider's plan with Apiable allows: `detail` names the shortest. Nothing is written."
           },
           "500": {
             "content": {
