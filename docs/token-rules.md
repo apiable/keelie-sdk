@@ -8,10 +8,13 @@ check a token.
 
 ## Where the token comes from
 
-- Each Provider has its own realm on the keelie issuer. Its Consumers get their tokens there.
-- `GET /orgs/{orgId}` gives the `issuer` of the realm. It is the exact `iss` of every token of
-  your Consumers. Only a switch of your own auth domain changes it, and only when you start it
-  (see below).
+- Each Provider has its own realm on a host of its own, `{slug}.keelie.io`. The slug is the one
+  you gave at signup. Your Consumers get their tokens there.
+- `GET /orgs/{orgId}` gives the `issuer` of the realm, in this form:
+  `https://{slug}.keelie.io/realms/{orgId}`. It is the exact `iss` of every token of your
+  Consumers. Copy it from `GET /orgs/{orgId}`. Do not make it from the slug yourself.
+- Only a switch of your own auth domain changes the issuer, and only when you start it (see
+  below). The slug can never change, because it is in the issuer.
 - A Consumer mints a token with the OAuth 2.0 `client_credentials` grant (RFC 6749 §4.4), at
   the token endpoint of the realm. The discovery document of the issuer names the endpoint.
 - The discovery documents are at `{issuer}/.well-known/openid-configuration` and at the RFC
@@ -23,7 +26,7 @@ On Growth and above, your realm can run on your own domain, such as `auth.portal
 Your Consumers then sign in, consent and mint there, under your logo and colours. The domain moves
 the issuer. Read this section before you switch.
 
-1. Point a CNAME from your domain to the issuer host.
+1. Point a CNAME from your domain to your realm's host, `{slug}.keelie.io`.
 2. Publish the TXT record that `GET /orgs/{orgId}` shows in `domain_proof`, at
    `_keelie-challenge.<your domain>`.
 3. Call `POST /orgs/{orgId}:verify-auth-domain` with the domain. `GET /orgs/{orgId}` then shows
@@ -35,9 +38,9 @@ the issuer. Read this section before you switch.
 6. 31 minutes after the switch, remove the old value from every verifier. That is the longest
    token lifetime, 30 minutes, and the 30 seconds of clock difference.
 
-The way back is the same. `POST /orgs/{orgId}:deactivate-auth-domain` moves the realm back to the
-issuer host and to Keelie's brand. Before you call it, accept both values again: `next_issuer` then
-shows the issuer host. Call it before you move to PAYG.
+The way back is the same. `POST /orgs/{orgId}:deactivate-auth-domain` moves the realm back to
+`{slug}.keelie.io` and to Keelie's brand. Before you call it, accept both values again:
+`next_issuer` then shows the issuer on `{slug}.keelie.io`. Call it before you move to PAYG.
 
 What a switch does, in both directions:
 

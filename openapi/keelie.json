@@ -6,7 +6,7 @@
         "description": "The auth domain to prove.",
         "properties": {
           "domain": {
-            "description": "The host your Consumers will sign in and mint on, such as `auth.portal-labs.example`. Point a CNAME at the issuer host first.",
+            "description": "The host your Consumers will sign in and mint on, such as `auth.portal-labs.example`. Point a CNAME at the Provider's host, `{slug}.keelie.io`, first.",
             "examples": [
               "auth.portal-labs.example"
             ],
@@ -1035,7 +1035,7 @@
           "redirect_uri": {
             "description": "Register this redirect URI for the client at the identity provider.",
             "examples": [
-              "https://keelie.apiable.io/realms/keelie-staff/broker/sso-01a01e21-6f52-71ff-b46c-fd1433f10a18/endpoint"
+              "https://api.keelie.io/realms/keelie-staff/broker/sso-01a01e21-6f52-71ff-b46c-fd1433f10a18/endpoint"
             ],
             "title": "Redirect Uri",
             "type": "string"
@@ -1314,7 +1314,7 @@
             "type": "string"
           },
           "slug": {
-            "description": "The Provider's host is `{slug}.apiable.io`. Lowercase letters, digits and inner hyphens, 63 at most. Some names are reserved for Apiable's own hosts. It cannot change later.",
+            "description": "The Provider's host is `{slug}.keelie.io`. That host is in the `iss` of every token of the Provider's Consumers, so the slug can never change. Lowercase letters, digits and inner hyphens, 63 at most. Some names are reserved for Keelie's own hosts.",
             "examples": [
               "portal-labs"
             ],
@@ -1405,9 +1405,9 @@
             "type": "string"
           },
           "issuer": {
-            "description": "The `iss` of every token of the Provider's Consumers: their realm on the issuer host. The SDK verifies a Consumer's token against it, and reads the key set from its discovery document.",
+            "description": "The `iss` of every token of the Provider's Consumers: their realm on the Provider's host, `{slug}.keelie.io`, or on its own auth domain while that is active. The SDK verifies a Consumer's token against it, and reads the key set from its discovery document.",
             "examples": [
-              "https://auth.apiable.io/realms/01a0c35e-a803-71e6-af8c-18eec66b1b1d"
+              "https://portal-labs.keelie.io/realms/01a0c35e-a803-71e6-af8c-18eec66b1b1d"
             ],
             "title": "Issuer",
             "type": "string"
@@ -1452,7 +1452,7 @@
                 "type": "null"
               }
             ],
-            "description": "The `iss` after the next switch of the Provider's own auth domain: on the domain before `:activate-auth-domain`, and back on the issuer host before `:deactivate-auth-domain`. Null when the Provider has proved no domain. Accept both values in every verifier before you switch, and remove the old one 31 minutes after the switch.",
+            "description": "The `iss` after the next switch of the Provider's own auth domain: on the domain before `:activate-auth-domain`, and back on the Provider's host before `:deactivate-auth-domain`. Null when the Provider has proved no domain. Accept both values in every verifier before you switch, and remove the old one 31 minutes after the switch.",
             "examples": [
               "https://auth.portal-labs.example/realms/01a0c35e-a803-71e6-af8c-18eec66b1b1d"
             ],
@@ -1626,9 +1626,9 @@
             "type": "string"
           },
           "issuer": {
-            "description": "The `iss` of every token of the Provider's Consumers: their realm on the issuer host. The SDK verifies a Consumer's token against it, and reads the key set from its discovery document.",
+            "description": "The `iss` of every token of the Provider's Consumers: their realm on the Provider's host, `{slug}.keelie.io`, or on its own auth domain while that is active. The SDK verifies a Consumer's token against it, and reads the key set from its discovery document.",
             "examples": [
-              "https://auth.apiable.io/realms/01a0c35e-a803-71e6-af8c-18eec66b1b1d"
+              "https://portal-labs.keelie.io/realms/01a0c35e-a803-71e6-af8c-18eec66b1b1d"
             ],
             "title": "Issuer",
             "type": "string"
@@ -1673,7 +1673,7 @@
                 "type": "null"
               }
             ],
-            "description": "The `iss` after the next switch of the Provider's own auth domain: on the domain before `:activate-auth-domain`, and back on the issuer host before `:deactivate-auth-domain`. Null when the Provider has proved no domain. Accept both values in every verifier before you switch, and remove the old one 31 minutes after the switch.",
+            "description": "The `iss` after the next switch of the Provider's own auth domain: on the domain before `:activate-auth-domain`, and back on the Provider's host before `:deactivate-auth-domain`. Null when the Provider has proved no domain. Accept both values in every verifier before you switch, and remove the old one 31 minutes after the switch.",
             "examples": [
               "https://auth.portal-labs.example/realms/01a0c35e-a803-71e6-af8c-18eec66b1b1d"
             ],
@@ -6697,7 +6697,7 @@
     },
     "/orgs/{orgId}:deactivate-auth-domain": {
       "post": {
-        "description": "The realm goes back to the issuer host and to Keelie's brand. This is the undo, and the way back after a move to PAYG, so it works on every plan. The domain stays proved. The switch moves the `iss` of every new token. Accept both values in every verifier before you switch (`next_issuer`), and remove the old one 31 minutes after it. The switch also ends every consent session of the realm: each end user signs in once more. You pick the moment. A token already minted keeps working until it expires.",
+        "description": "The realm goes back to the Provider's host, `{slug}.keelie.io`, and to Keelie's brand. This is the undo, and the way back after a move to PAYG, so it works on every plan. The domain stays proved. The switch moves the `iss` of every new token. Accept both values in every verifier before you switch (`next_issuer`), and remove the old one 31 minutes after it. The switch also ends every consent session of the realm: each end user signs in once more. You pick the moment. A token already minted keeps working until it expires.",
         "operationId": "deactivateOrgAuthDomain",
         "parameters": [
           {
@@ -6743,7 +6743,7 @@
                 }
               }
             },
-            "description": "The realm runs on the issuer host. A repeat changes nothing."
+            "description": "The realm runs on the Provider's host. A repeat changes nothing."
           },
           "401": {
             "content": {
@@ -6813,7 +6813,7 @@
             ]
           }
         ],
-        "summary": "Move the Provider's realm back to the issuer host",
+        "summary": "Move the Provider's realm back to its own host",
         "tags": [
           "Orgs"
         ]
