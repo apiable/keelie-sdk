@@ -132,8 +132,9 @@ token. Each refresh token works once.
   `azp` for a credential's token.
 - The other claims follow the rules above.
 
-The person's Consumer is set before the person signs in. Your own identity provider sends it
-when the person signs in through it, or an operator sets it. A person with no Consumer, or
+The person's Consumer is set before the person signs in. When you connect your own sign-in
+(below), keelie links each person to the Consumer whose `external_ref` is their `sub` there.
+Otherwise an operator sets it. A person with no Consumer, or
 with a Consumer that has no live subscription, gets no token. Neither does a person whose agent
 asks for a capability that the Consumer's plan does not grant. The answer is `400` with
 `{"error": "unauthorized_client"}`.
@@ -151,6 +152,34 @@ from the verified token and sends it. Rules:
   That window is the life of the token, at most 30 minutes, plus the time the SDK holds the event.
 - keelie trusts the `consumer_id` that you send, as it trusts `client_id`. Use only the value from
   the verified token. Reported use burns a Consumer's balance. It is never an invoice line.
+
+### Your own sign-in
+
+Every plan may connect its own OpenID Connect sign-in, with
+`PUT /orgs/{orgId}/consumer-sign-in`. Then a person
+who connects an agent goes straight to your sign-in, and then to the consent page. keelie shows
+no login form of its own.
+
+- keelie asks your sign-in for the scope `openid` only. Your ID token must carry a `sub` that is
+  the same for the same person each time. keelie reads nothing else from it.
+- No claim of your sign-in names the Consumer. keelie links the person to the Consumer whose
+  `external_ref` is that `sub`. So set `external_ref` to the person's `sub`.
+- Each `external_ref` belongs to one Consumer of yours. A second Consumer with the same value
+  gets `409`.
+- keelie links the person before they come: when you connect the sign-in, and when you make a
+  Consumer while it is connected.
+- A person whose `sub` no Consumer holds can sign in, and gets no token. Make their Consumer,
+  and their next token names it.
+- keelie checks the ID token's signature with your `jwks_url`, and its `iss` against your
+  `issuer`. It uses PKCE with `S256`, and sends the client secret in the form body
+  (`client_secret_post`).
+- Register each of the answer's `redirect_uris` with your sign-in's client. While you have your
+  own auth domain, the answer holds two: one on your realm's host, `{slug}.keelie.io`, and one on
+  your domain. Register both. Then the sign-in works before and after a switch, either way.
+- keelie refuses a `token_url` or `jwks_url` whose host resolves to an address that is not on
+  the public internet: `422`.
+- `DELETE` disconnects your sign-in. A new connect of an agent then fails. An agent that is
+  connected already keeps its session until the session ends.
 
 A token for a person always lives the shortest token lifetime of your own keelie subscription. keelie checks the
 Consumer's credits and spend cap at each refresh. A refused refresh also ends the person's

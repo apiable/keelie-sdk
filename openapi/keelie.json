@@ -462,6 +462,157 @@
         "title": "CatalogRead",
         "type": "object"
       },
+      "ConsumerSignInPut": {
+        "additionalProperties": false,
+        "description": "The whole settings of the Provider's sign-in. A `PUT` replaces all of them.",
+        "properties": {
+          "authorization_url": {
+            "description": "Where the person's browser signs in. An `https` URL on port 443, with a host name, no userinfo and no fragment.",
+            "examples": [
+              "https://login.provider.example/authorize"
+            ],
+            "maxLength": 2048,
+            "title": "Authorization Url",
+            "type": "string"
+          },
+          "client_id": {
+            "description": "The client the Provider registered for keelie at its sign-in.",
+            "examples": [
+              "kF3zq9keelie"
+            ],
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Client Id",
+            "type": "string"
+          },
+          "client_secret": {
+            "description": "The secret of that client. Write-only: it goes to the issuer, keelie keeps no copy, and no response returns it.",
+            "examples": [
+              "xxxx"
+            ],
+            "format": "password",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Client Secret",
+            "type": "string",
+            "writeOnly": true
+          },
+          "issuer": {
+            "description": "The `iss` every ID token must carry, exactly as the sign-in writes it, with any trailing slash. An `https` URL on port 443, with a host name, no userinfo and no fragment.",
+            "examples": [
+              "https://login.provider.example/"
+            ],
+            "maxLength": 2048,
+            "title": "Issuer",
+            "type": "string"
+          },
+          "jwks_url": {
+            "description": "The key set of the sign-in. The issuer checks the signature of every ID token with it. An `https` URL on port 443, with a host name, no userinfo and no fragment.",
+            "examples": [
+              "https://login.provider.example/.well-known/jwks.json"
+            ],
+            "maxLength": 2048,
+            "title": "Jwks Url",
+            "type": "string"
+          },
+          "token_url": {
+            "description": "Where the issuer exchanges the code. An `https` URL on port 443, with a host name, no userinfo and no fragment.",
+            "examples": [
+              "https://login.provider.example/oauth/token"
+            ],
+            "maxLength": 2048,
+            "title": "Token Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url",
+          "token_url",
+          "jwks_url",
+          "issuer",
+          "client_id",
+          "client_secret"
+        ],
+        "title": "ConsumerSignInPut",
+        "type": "object"
+      },
+      "ConsumerSignInRead": {
+        "description": "The Provider's sign-in. Never its secret.",
+        "properties": {
+          "authorization_url": {
+            "examples": [
+              "https://login.provider.example/authorize"
+            ],
+            "title": "Authorization Url",
+            "type": "string"
+          },
+          "client_id": {
+            "examples": [
+              "kF3zq9keelie"
+            ],
+            "title": "Client Id",
+            "type": "string"
+          },
+          "issuer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "examples": [
+              "https://login.provider.example/"
+            ],
+            "title": "Issuer"
+          },
+          "jwks_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "examples": [
+              "https://login.provider.example/.well-known/jwks.json"
+            ],
+            "title": "Jwks Url"
+          },
+          "redirect_uris": {
+            "description": "Register each of these as a redirect URI, or callback URL, of the client at the sign-in. The first is the one in use: on the realm's host, `{slug}.keelie.io`, or on the Provider's own auth domain while that is active. While the Provider has its own auth domain, a second is the one after the next switch, to the domain or back from it. Register both, so the sign-in works on either side of a switch.",
+            "examples": [
+              [
+                "https://auth.provider.example/realms/01a01e21-6f52-71ff-b46c-fd1433f10a18/broker/sign-in/endpoint"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Redirect Uris",
+            "type": "array"
+          },
+          "token_url": {
+            "examples": [
+              "https://login.provider.example/oauth/token"
+            ],
+            "title": "Token Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url",
+          "token_url",
+          "jwks_url",
+          "issuer",
+          "client_id",
+          "redirect_uris"
+        ],
+        "title": "ConsumerSignInRead",
+        "type": "object"
+      },
       "CredentialCreate": {
         "additionalProperties": false,
         "description": "What a Provider sends to issue a credential to one of its Consumers.",
@@ -3099,7 +3250,7 @@
                 "type": "null"
               }
             ],
-            "description": "The Provider's own reference for this Consumer, for example an integration id. keelie stores it and does not read it.",
+            "description": "The Provider's own reference for this Consumer, for example an integration id. Unique among the Provider's Consumers. When the Provider connected its own sign-in, set it to the person's `sub` there: the person then signs in as this Consumer when an agent connects.",
             "examples": [
               "crm-4711"
             ],
@@ -5725,6 +5876,424 @@
         ]
       }
     },
+    "/orgs/{orgId}/consumer-sign-in": {
+      "delete": {
+        "operationId": "deleteOrgConsumerSignIn",
+        "parameters": [
+          {
+            "description": "The Provider's id.",
+            "in": "path",
+            "name": "orgId",
+            "required": true,
+            "schema": {
+              "description": "The Provider's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd1433f10a18"
+              ],
+              "format": "uuid",
+              "title": "orgId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The sign-in is gone, and each person's link to it. A person who connects an agent now gets the issuer's own login form, and nobody holds a password there. A session that an agent already holds lives on until it ends."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No Provider has this id in the caller's tenant, or the Provider has connected no sign-in."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The Provider's Consumers live in a realm it shares with other Providers, which takes no sign-in. Only a Provider that signed up since Consumers got a realm of their own can connect one."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The issuer did not answer. `Retry-After` says when."
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "orgs:write"
+            ]
+          }
+        ],
+        "summary": "Disconnect the Provider's own sign-in",
+        "tags": [
+          "Orgs"
+        ]
+      },
+      "get": {
+        "operationId": "getOrgConsumerSignIn",
+        "parameters": [
+          {
+            "description": "The Provider's id.",
+            "in": "path",
+            "name": "orgId",
+            "required": true,
+            "schema": {
+              "description": "The Provider's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd1433f10a18"
+              ],
+              "format": "uuid",
+              "title": "orgId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsumerSignInRead"
+                }
+              }
+            },
+            "description": "The sign-in, without its client secret."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No Provider has this id in the caller's tenant, or the Provider has connected no sign-in."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The Provider's Consumers live in a realm it shares with other Providers, which takes no sign-in. Only a Provider that signed up since Consumers got a realm of their own can connect one."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The issuer did not answer. `Retry-After` says when."
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "orgs:read"
+            ]
+          }
+        ],
+        "summary": "Read the Provider's own sign-in for its Consumers",
+        "tags": [
+          "Orgs"
+        ]
+      },
+      "put": {
+        "description": "Connects the Provider's own OpenID Connect sign-in. A person who connects an agent then signs in there, and goes on to the consent page. Every plan may connect one.",
+        "operationId": "putOrgConsumerSignIn",
+        "parameters": [
+          {
+            "description": "The Provider's id.",
+            "in": "path",
+            "name": "orgId",
+            "required": true,
+            "schema": {
+              "description": "The Provider's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd1433f10a18"
+              ],
+              "format": "uuid",
+              "title": "orgId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsumerSignInPut"
+              }
+            }
+          },
+          "description": "Every setting of the sign-in.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsumerSignInRead"
+                }
+              }
+            },
+            "description": "The sign-in was replaced. Every person who connects an agent signs in there."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsumerSignInRead"
+                }
+              }
+            },
+            "description": "The sign-in is new. From now on, every person who connects an agent signs in there, and no keelie form shows.",
+            "headers": {
+              "Location": {
+                "description": "The sign-in's path, `/orgs/{orgId}/consumer-sign-in`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No Provider has this id in the caller's tenant."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The Provider's Consumers live in a realm it shares with other Providers, which takes no sign-in. Only a Provider that signed up since Consumers got a realm of their own can connect one."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A setting is not valid, or the host of `token_url` or `jwks_url` does not resolve to public addresses only. Nothing was written."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The issuer did not answer. `Retry-After` says when."
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "orgs:write"
+            ]
+          }
+        ],
+        "summary": "Connect the Provider's own sign-in for its Consumers",
+        "tags": [
+          "Orgs"
+        ]
+      }
+    },
     "/orgs/{orgId}/identity-provider": {
       "get": {
         "operationId": "getOrgIdentityProvider",
@@ -8280,7 +8849,7 @@
                 }
               }
             },
-            "description": "The first request with this `Idempotency-Key` is still running."
+            "description": "The first request with this `Idempotency-Key` is still running, or another Consumer of the Provider has this `external_ref`."
           },
           "422": {
             "content": {
@@ -8301,6 +8870,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The issuer did not answer while it linked the Consumer to the Provider's own sign-in. Nothing was made. Send the same request again after `Retry-After`."
           }
         },
         "security": [
