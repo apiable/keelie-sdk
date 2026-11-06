@@ -89,15 +89,22 @@ metadata sends the `resource` that it names, exactly. That is your server addres
 | `aud` | Your server address, the `resource` of your org. | Must contain your address. |
 | `typ` | `Bearer` | Must be equal. |
 | `exp` | Seconds since the epoch. | Required. Allow 30 seconds of clock difference. |
-| `nbf`, `iat` | Seconds since the epoch. | Check them when they are present, with the same 30 seconds. |
+| `iat` | Seconds since the epoch. | Check it with the same 30 seconds. |
+| `nbf` | Seconds since the epoch. A token does not carry it today. | Check it when it is present, with the same 30 seconds. |
 | `azp` | The client id of the Consumer's credential. On a token for a person, the agent's client. | Required. It tells you which credential or agent sent the call. |
 | `org_id` | Your org id, a UUID. It is the `id` of `GET /orgs/{orgId}`. | Required. Must be your org id. A token with another `org_id` belongs to another Provider. |
 | `scope` | Space-separated scopes, from the Consumer's plan. | Split on a space. Allow a call only when the token has the scope that the call needs. |
 | `jti` | The token id. | Log it. Never log the token. |
 | `sub` | On a credential's token, not the credential. On a token for a person, the person. | On a credential's token, ignore it and use `azp`. On a token for a person, see below. |
 | `consumer_id` | Only on a token for a person: the id of the Consumer. | See below. |
+| `auth_time` | Only on a token for a person: when the person signed in, in seconds since the epoch. | You do not need to check it. |
+| `sid` | Only on a token for a person: the id of the person's session. | You do not need to check it. |
 
-A claim that this table does not name is not part of these rules. Ignore it.
+This table is the full list. A token carries no claim that it does not name. A token never
+carries the IP address or the host name of the machine that asked for the token.
+
+If your API receives a claim that this table does not name, ignore it. It is not part of these
+rules.
 
 ## The lifetime
 
