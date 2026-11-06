@@ -6531,7 +6531,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "A setting is not valid, or the host of `token_url` or `jwks_url` does not resolve to public addresses only. Nothing was written."
           },
           "500": {
             "content": {
