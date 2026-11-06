@@ -2560,7 +2560,7 @@
           },
           "status": {
             "$ref": "#/components/schemas/ProductStatus",
-            "description": "A product is a `draft` until it is published.",
+            "description": "A product is a `draft` until the first of its plans is published. Then it is `published`, and it stays `published` unless it is archived.",
             "examples": [
               "draft"
             ]
@@ -2700,7 +2700,7 @@
           },
           "status": {
             "$ref": "#/components/schemas/ProductStatus",
-            "description": "A product is a `draft` until it is published.",
+            "description": "A product is a `draft` until the first of its plans is published. Then it is `published`, and it stays `published` unless it is archived.",
             "examples": [
               "draft"
             ]
@@ -2746,7 +2746,7 @@
         "type": "object"
       },
       "ProductStatus": {
-        "description": "Where a product is in its life. A new one is a draft until it is published.",
+        "description": "Where a product is in its life. A new one is a draft until the first of its plans is\npublished. No route sets it.",
         "enum": [
           "draft",
           "published",
@@ -7123,7 +7123,7 @@
                 }
               }
             },
-            "description": "The published plan. A plan with a fee now has its monthly price in the Provider's Stripe account. A published plan does not change: a change is a new version."
+            "description": "The published plan. A plan with a fee now has its monthly price in the Provider's Stripe account. A published plan does not change: a change is a new version. The plan's product is `published` from the first published plan on."
           },
           "401": {
             "content": {
