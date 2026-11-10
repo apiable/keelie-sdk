@@ -137,6 +137,28 @@ async def test_a_full_batch_is_sent_with_its_keys(
     await reporter.aclose()
 
 
+@pytest.mark.parametrize(
+    ("amount", "sent"),
+    [
+        (Decimal("0.0000010"), "0.000001"),
+        (Decimal("2.000000000"), "2.000000"),
+        (Decimal("1.50"), "1.50"),
+        (Decimal("0.000001"), "0.000001"),
+    ],
+)
+async def test_an_amount_is_sent_with_six_places_at_most(
+    keelie: Keelie, reporter_for: Callable[..., UsageReporter], amount: Decimal, sent: str
+) -> None:
+    reporter = reporter_for(batch_size=1, flush_interval_seconds=60)
+
+    reporter.record(CLIENT_ID, "GET /orders", quantity=amount, credits=amount)
+    await _until(lambda: len(keelie.requests) == 1)
+
+    event = keelie.batches()[0][0]
+    assert (event["quantity"], event["credits"]) == (sent, sent)
+    await reporter.aclose()
+
+
 async def test_a_part_batch_is_sent_at_the_interval(
     keelie: Keelie, reporter_for: Callable[..., UsageReporter]
 ) -> None:
