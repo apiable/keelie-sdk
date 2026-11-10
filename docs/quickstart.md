@@ -14,8 +14,8 @@ stack, which serves plain http.
 Set the address of keelie and of its issuer once. The examples below read them.
 
 ```bash
-KEELIE=https://<your keelie host>
-ISSUER_HOST=https://<your issuer host>
+KEELIE=https://api.keelie.io
+ISSUER_HOST=$KEELIE
 TOKEN_URL=$ISSUER_HOST/realms/keelie/protocol/openid-connect/token
 ```
 
@@ -33,7 +33,7 @@ The answer holds your org and two credentials.
 | Member | What it is | Where it goes |
 |---|---|---|
 | `id` | Your org id. Every token of your Consumers carries it as `org_id`. | The SDK configuration |
-| `issuer` | The issuer of your Consumers' tokens: your own realm. | The SDK configuration |
+| `issuer` | The issuer of your Consumers' tokens: your own realm, on your own host, `https://{slug}.keelie.io/realms/{id}`. Copy it as it is. | The SDK configuration |
 | `credential` | Your admin credential. It manages keelie. | Your password manager. **Never put it in your application.** |
 | `sdk_credential` | The credential of the SDK. It can report usage and read your products, and nothing else. | Your application's secrets |
 
