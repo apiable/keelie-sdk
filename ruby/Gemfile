@@ -1,0 +1,23 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gemspec
+
+# Tests only. Each version is pinned, and was published at least two weeks before it was added.
+group :test do
+  gem "actionpack", "8.1.4"
+  gem "faraday", "2.15.0" # the MCP gem's HTTP client needs it
+  gem "mcp", "1.8.0"
+  gem "minitest", "6.0.6"
+  gem "puma", "8.0.2"
+  gem "rack", "3.2.7"
+  gem "rake", "13.4.2"
+
+  # Pulled in by actionpack. Pinned here because their newest releases are younger than two weeks.
+  gem "crass", "1.0.7"
+  gem "loofah", "2.25.2"
+  gem "nokogiri", "1.19.4"
+  gem "rack-test", "2.2.0"
+  gem "rails-html-sanitizer", "1.7.1"
+end
