@@ -149,7 +149,9 @@ export class SigningKeys {
   async #getJson(url: string): Promise<unknown> {
     const response = await this.#fetch(url, {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_SECONDS * 1000),
-      redirect: "follow",
+      // As in Python: a redirect is not followed, so the keys come from the
+      // addresses the issuer names, or from nowhere. It fails the fetch.
+      redirect: "error",
     });
     if (!response.ok) throw new KeySetError(`status ${response.status}`);
     return response.json();

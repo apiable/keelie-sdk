@@ -28,6 +28,10 @@ for (const [name, express] of [
       "GET /v1/orders/:orderId": "orders:read",
       "POST /v1/orders": "orders:write",
       "GET /v1/items/:itemId": "items:read",
+      "HEAD /v1/probe": "probe:read",
+      "GET /v1/probe": "orders:read",
+      "GET /v1/chained": "orders:read",
+      "HEAD /v1/any": "probe:read",
     });
     const catalog = new AiCatalog(async () => Response.json({ entries: [] }), metadata);
     const app = express();
@@ -41,6 +45,19 @@ for (const [name, express] of [
     });
     app.post("/v1/orders", scopeGuard(scopes, metadata), (_req, res) => {
       res.status(201).json({});
+    });
+    // A HEAD handler of its own, before the GET that would also answer a HEAD.
+    app.head("/v1/probe", scopeGuard(scopes, metadata), (_req, res) => {
+      res.end();
+    });
+    app.get("/v1/probe", scopeGuard(scopes, metadata), (_req, res) => {
+      res.json({});
+    });
+    app.route("/v1/chained").all(scopeGuard(scopes, metadata)).get((_req, res) => {
+      res.json({});
+    });
+    app.all("/v1/any", scopeGuard(scopes, metadata), (_req, res) => {
+      res.end();
     });
     app.get("/v1/unmapped", scopeGuard(scopes, metadata), (_req, res) => {
       res.json({});
@@ -106,6 +123,23 @@ for (const [name, express] of [
         assert.equal(response.status, 403, path);
         assert.equal(response.headers.get("www-authenticate"), metadata.challenge("insufficient_scope"));
       }
+    });
+
+    it("checks a HEAD that the GET handler answers as that GET", async () => {
+      assert.equal((await get("/v1/orders/42", `Bearer ${token}`, "HEAD")).status, 200);
+      const refused = await get("/v1/items/7", `Bearer ${token}`, "HEAD");
+      assert.equal(refused.status, 403);
+      assert.equal(refused.headers.get("www-authenticate"), metadata.challenge("insufficient_scope"));
+      assert.equal((await get("/v1/items/7", `Bearer ${await sign(pair, { scope: "items:read" })}`, "HEAD")).status, 200);
+      // A route with a HEAD handler of its own is checked as HEAD.
+      assert.equal((await get("/v1/probe", `Bearer ${token}`)).status, 200);
+      assert.equal((await get("/v1/probe", `Bearer ${token}`, "HEAD")).status, 403);
+      assert.equal((await get("/v1/probe", `Bearer ${await sign(pair, { scope: "probe:read" })}`, "HEAD")).status, 200);
+      // A guard in .all() before a .get(): the GET handler answers, so the GET scope.
+      assert.equal((await get("/v1/chained", `Bearer ${token}`, "HEAD")).status, 200);
+      // A route of .all() alone has no GET: checked as HEAD.
+      assert.equal((await get("/v1/any", `Bearer ${token}`, "HEAD")).status, 403);
+      assert.equal((await get("/v1/any", `Bearer ${await sign(pair, { scope: "probe:read" })}`, "HEAD")).status, 200);
     });
 
     it("reads the template of a route in a mounted router", async () => {

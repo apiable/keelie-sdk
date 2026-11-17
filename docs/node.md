@@ -147,6 +147,9 @@ network call.
 | `degraded` | The last fetch failed. The keys in hand go on verifying. |
 | `offline` | No key in hand. Every token is refused. A new process is `offline` until the first token fetches the key set. |
 
+The discovery document is fetched from the issuer's address, and the key set from the `jwks_uri` it
+names, as in Python. A redirect is not followed: the fetch fails, as a network error does.
+
 ### `Claims`
 
 A frozen object.
@@ -214,6 +217,11 @@ app.get("/v1/orders/:orderId", scopeGuard(scopes, metadata), handler);
 Checks the route it is on. The route is the method, the path the router was mounted at, and the
 route's own template. A refused token gets `403`,
 `WWW-Authenticate: Bearer error="insufficient_scope", resource_metadata="..."` and an empty body.
+
+Express answers a `HEAD` with the route's `GET` handler when the route has no `HEAD` handler of its
+own. `scopeGuard` checks that request as the `GET` it runs: `"GET /v1/orders/:orderId"` also guards
+`HEAD /v1/orders/42`, and a refusal is logged with `method=GET`. A route with its own `HEAD`
+handler, or with no `GET` handler (such as `app.all()` alone), is checked as `HEAD`.
 
 The path the router was mounted at is read from the request. Express matches it without case unless
 you set `case sensitive routing`, or `caseSensitive` on the router that holds the mount, so

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { KeysUnavailable, SigningKeys, UnknownKey } from "../src/keys.js";
-import { Clock, FakeIssuer, ISSUER, JWKS_URI, keyPair } from "./support.js";
+import { Clock, FakeIssuer, ISSUER, JWKS_URI, keyPair, listen } from "./support.js";
 
 const pair = await keyPair("key-1");
 const DISCOVERY = `${ISSUER}/.well-known/openid-configuration`;
@@ -97,6 +97,42 @@ describe("SigningKeys", () => {
     await keys.key("no-use");
     for (const kid of ["enc", "ps", "ec", "broken"]) {
       await assert.rejects(keys.key(kid), UnknownKey);
+    }
+  });
+
+  it("follows no redirect, from the discovery document or the key set", async () => {
+    // Another origin serves a discovery document and a key set of its own.
+    const reached: string[] = [];
+    let issuerUrl = "";
+    const other = await listen(((req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => {
+      reached.push(req.url ?? "");
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify(
+          req.url === "/certs" ? { keys: [pair.jwk] } : { issuer: issuerUrl, jwks_uri: `${issuerUrl}/certs` },
+        ),
+      );
+    }) as never);
+    let redirectDiscovery = true;
+    const issuer = await listen(((req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => {
+      if (req.url === "/certs" || redirectDiscovery) {
+        res.writeHead(302, { Location: `${other.url}${req.url ?? ""}` }).end();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ issuer: issuerUrl, jwks_uri: `${issuerUrl}/certs` }));
+    }) as never);
+    issuerUrl = issuer.url;
+    try {
+      for (const discovery of [true, false]) {
+        redirectDiscovery = discovery;
+        const keys = new SigningKeys(issuer.url);
+        await assert.rejects(keys.key("key-1"), KeysUnavailable, `redirect of the discovery document: ${discovery}`);
+        assert.equal(keys.status(), "offline");
+      }
+      assert.deepEqual(reached, []);
+    } finally {
+      await Promise.all([other.close(), issuer.close()]);
     }
   });
 

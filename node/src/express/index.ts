@@ -80,6 +80,9 @@ export function tokenGuard(options: GuardOptions): RequestHandler {
  * gets `403` with `WWW-Authenticate: Bearer error="insufficient_scope"` and an
  * empty body.
  *
+ * A `HEAD` that the route's `GET` handler answers, because the route has no
+ * `HEAD` handler of its own, is checked as that `GET`.
+ *
  * The path the router was mounted at comes from the request, as Express gives it
  * in `req.baseUrl`. Express matches a mount path without case unless you set
  * `case sensitive routing` (or `caseSensitive` on the router that holds the
@@ -105,10 +108,11 @@ export function scopeGuard(scopes: ScopeMap, metadata: ProtectedResourceMetadata
       return;
     }
     const template = typeof req.route?.path === "string" ? req.route.path : null;
+    const method = routeMethod(req);
     try {
       // A route with no plain template, such as a regular expression, is in no map.
-      const routes = template === null ? ["\u0000"] : mapRoutes(req, scopes, template);
-      for (const route of routes) scopes.check(claims, req.method, route);
+      const routes = template === null ? ["\u0000"] : mapRoutes(req, scopes, method, template);
+      for (const route of routes) scopes.check(claims, method, route);
     } catch (error) {
       if (!(error instanceof InsufficientScope)) throw error;
       respond(res, 403, { "WWW-Authenticate": refusal });
@@ -116,6 +120,19 @@ export function scopeGuard(scopes: ScopeMap, metadata: ProtectedResourceMetadata
     }
     next();
   };
+}
+
+/**
+ * The method the route serves the request with. Express answers a `HEAD` with
+ * the route's `GET` handler when the route has no `HEAD` handler of its own, and
+ * `req.method` stays `HEAD`. That request is checked as the `GET` it runs. A
+ * route with no `GET`, such as one of `app.all()` alone, is checked as `HEAD`.
+ */
+function routeMethod(req: Request): string {
+  if (req.method !== "HEAD") return req.method;
+  const methods = (req.route as { methods?: Record<string, unknown> } | undefined)?.methods;
+  // Express's own rule: the GET handler answers when there is one and no HEAD.
+  return methods?.["head"] !== true && methods?.["get"] === true ? "GET" : "HEAD";
 }
 
 /**
@@ -128,13 +145,13 @@ export function scopeGuard(scopes: ScopeMap, metadata: ProtectedResourceMetadata
  * that part can be the one. The token then needs the scope of every one of them:
  * it can only guard more than the router serves, never less.
  */
-function mapRoutes(req: Request, scopes: ScopeMap, template: string): string[] {
+function mapRoutes(req: Request, scopes: ScopeMap, method: string, template: string): string[] {
   const base = req.baseUrl;
   const exact = `${base}${template}`;
   if (base === "") return [exact];
   // JavaScript's own rule for case, the one Express's path matching uses.
   const sameBase = new RegExp(`^${base.replace(/[\\^$.*+?()[\]{}|/-]/g, "\\$&")}$`, "i");
-  const routes = scopes.routes(req.method);
+  const routes = scopes.routes(method);
   const others = routes.filter(
     (route) =>
       route !== exact &&
