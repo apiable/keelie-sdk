@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -193,7 +192,7 @@ func TestTheTokenRequestFollowsNoRedirectEvenWithAClientThatWould(t *testing.T) 
 		c := credentialWith(t, client, issuer.URL+"/token")
 		_, err := c.Send(context.Background(), http.MethodGet, "/ai-catalog", nil, nil)
 		issuer.Close()
-		if err == nil || !strings.Contains(err.Error(), "answered "+strconv.Itoa(status)) {
+		if err == nil || errorName(err) != "token_status "+strconv.Itoa(status) {
 			t.Fatalf("%d: %v", status, err)
 		}
 		if client.CheckRedirect != nil {

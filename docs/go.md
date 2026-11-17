@@ -321,7 +321,8 @@ guard, err := nethttp.MCPGuard(nethttp.MCPGuardOptions{
 	Reporter: reporter,
 	// MaxBodyBytes: 4 << 20, the default
 })
-mux.Handle("/mcp", guard(mcp.NewStreamableHTTPHandler(getServer, nil)))
+mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(getServer, nil))
+http.ListenAndServe(":3000", guard(mux))
 ```
 
 | Option | Value |
@@ -331,7 +332,11 @@ mux.Handle("/mcp", guard(mcp.NewStreamableHTTPHandler(getServer, nil)))
 | `MaxBodyBytes` | The largest body it reads. 4 MiB. |
 
 Give the MCP endpoint itself as the `resource` of the metadata, such as
-`https://api.example.com/mcp`. It wraps any MCP server's handler; the tests run the Streamable HTTP
+`https://api.example.com/mcp`. Wrap the whole mux, not only the `/mcp` route: the guard serves the
+metadata at `/.well-known/oauth-protected-resource/mcp`, the address its `401` gives, and a mux
+sends that path to the guard only when the guard wraps the mux. Paths outside the resource pass to
+your mux with no token check. Do not give the host root as the resource: the guard then reads every
+POST of the mux as JSON-RPC. It wraps any MCP server's handler; the tests run the Streamable HTTP
 handler of the official Go MCP SDK, `github.com/modelcontextprotocol/go-sdk`, with its own client.
 It reads the body once, checks it, and hands the same bytes on to your server. The claims are in
 the request's context for your tools.
@@ -510,6 +515,12 @@ or answers with neither a response nor an error, is a failed request: `error=cli
 `error=no_response` on the line of what failed, such as `apiable.usage_not_sent`. The reporter keeps
 the batch and sends it again, as after a network error. A response body is read up to 1 MiB; a
 longer one is a failed request, `error=too_large`.
+
+`SDKCredential` mints its token at the token endpoint first. A mint that fails is named on the line
+of what failed: `error="token_status 401"` when the token endpoint answers with a status that is not
+`2xx`, such as after the client secret is rotated, and `error=token` when its answer holds no
+`access_token` or `expires_in`. A mint that does not reach the endpoint is `error=network` or
+`error=timeout`.
 
 ## Test with no network
 

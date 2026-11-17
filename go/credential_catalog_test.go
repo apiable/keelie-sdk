@@ -242,3 +242,36 @@ func TestTheCatalogMakesOneFetchForManyRequestsAtOnce(t *testing.T) {
 		t.Fatalf("fetched %d", s.fetched.Load())
 	}
 }
+
+func TestAFailedMintIsNamedInTheLog(t *testing.T) {
+	for name, c := range map[string]struct {
+		answer *http.Response
+		word   string
+	}{
+		"refused":  {tk.Response(401, nil), "token_status 401"},
+		"no token": {tk.JSON(200, map[string]any{"token_type": "Bearer"}), "token"},
+		"not JSON": {tk.Response(200, []byte("<html>")), "token"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lines := captureLog(t)
+			keelie, err := NewSDKCredential(SDKCredentialOptions{
+				KeelieURL: "https://keelie.example", TokenURL: "https://issuer.example.com/token",
+				ClientID: "sdk", ClientSecret: "rotated",
+				HTTPClient: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+					if r.URL.String() != "https://issuer.example.com/token" {
+						t.Errorf("sent to %s before a token was minted", r.URL)
+					}
+					return c.answer, nil
+				})},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := newReporter(t, keelie, &UsageReporterOptions{BatchSize: 1, FlushInterval: 10 * time.Millisecond})
+			r.Record(Event{ClientID: "c", CapabilityKey: "GET /x"})
+			want := "apiable.usage_not_sent events=1 error=" + c.word
+			until(t, func() bool { return lines.Has(want) })
+			r.Close(context.Background())
+		})
+	}
+}

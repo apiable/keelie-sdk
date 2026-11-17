@@ -93,10 +93,29 @@ func TestARealMCPClientListsAndCallsAToolItsTokenAllowsAndTheCallIsCounted(t *te
 			server := mcp.NewServer(&mcp.Implementation{Name: "product-classifier", Version: "1.0.0"}, nil)
 			mcp.AddTool(server, &mcp.Tool{Name: "classify", Description: "Classify a product"}, text("Apparel > Shoes"))
 			mcp.AddTool(server, &mcp.Tool{Name: "delete_all", Description: "Delete everything"}, text("gone"))
+			// The mount of docs/go.md: the guard wraps the whole mux.
 			mux := http.NewServeMux()
-			mux.Handle("/mcp", guard(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, options)))
-			srv := httptest.NewServer(mux)
+			mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, options))
+			mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
+			srv := httptest.NewServer(guard(mux))
 			defer srv.Close()
+
+			// An agent with no token reads the metadata, and a route outside
+			// the resource needs no token.
+			for path, want := range map[string]string{
+				"/.well-known/oauth-protected-resource/mcp": string(metadata.Document()),
+				"/health": "ok",
+			} {
+				res, err := http.Get(srv.URL + path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, _ := io.ReadAll(res.Body)
+				res.Body.Close()
+				if res.StatusCode != 200 || string(body) != want {
+					t.Fatalf("GET %s: %d %s", path, res.StatusCode, body)
+				}
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()

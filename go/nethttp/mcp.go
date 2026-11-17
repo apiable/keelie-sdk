@@ -47,13 +47,21 @@ type MCPGuardOptions struct {
 // MCPGuard checks the token and the tool's scope, and reports each tool call.
 //
 // Give the MCP endpoint itself as the resource of the metadata: every POST
-// under it is read as JSON-RPC. Wrap your MCP server's handler, such as the
-// Streamable HTTP handler of github.com/modelcontextprotocol/go-sdk:
+// under it is read as JSON-RPC. Put your MCP server's handler, such as the
+// Streamable HTTP handler of github.com/modelcontextprotocol/go-sdk, on your
+// mux, and wrap the whole mux:
 //
 //	guard, err := nethttp.MCPGuard(nethttp.MCPGuardOptions{
 //		Verifier: verifier, Metadata: metadata, Tools: tools, Reporter: reporter,
 //	})
-//	mux.Handle("/mcp", guard(mcp.NewStreamableHTTPHandler(getServer, nil)))
+//	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(getServer, nil))
+//	http.ListenAndServe(":3000", guard(mux))
+//
+// The guard serves the metadata, at /.well-known/oauth-protected-resource/mcp
+// for the resource /mcp. With guard on the /mcp route alone, the mux never
+// sends that path to it, and an agent cannot find the issuer. Paths outside the
+// resource pass to your mux with no token check. Do not give the host root as
+// the resource: the guard then reads every POST of the mux as JSON-RPC.
 //
 // What it checks on a request whose token verified:
 //

@@ -229,7 +229,9 @@ func (c *SDKCredential) mintToken() (string, float64, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		drain(resp.Body)
-		return "", 0, fmt.Errorf("keelie: the token endpoint answered %d", resp.StatusCode)
+		// The log names a refused mint, such as a rotated client secret,
+		// apart from a network error.
+		return "", 0, &fetchError{fmt.Sprintf("token_status %d", resp.StatusCode)}
 	}
 	body, err := readBody(resp.Body)
 	if err != nil {
@@ -240,7 +242,7 @@ func (c *SDKCredential) mintToken() (string, float64, error) {
 		ExpiresIn   *float64 `json:"expires_in"`
 	}
 	if err := json.Unmarshal(body, &answer); err != nil || answer.AccessToken == nil || answer.ExpiresIn == nil {
-		return "", 0, errors.New("keelie: the token endpoint answered without a token")
+		return "", 0, &fetchError{"token"}
 	}
 	return *answer.AccessToken, *answer.ExpiresIn, nil
 }

@@ -378,3 +378,58 @@ func TestMembersTheGuardDoesNotReadMayBeInAnyCase(t *testing.T) {
 		t.Fatalf("bodies %d, events %v", len(s.server.bodies), sent)
 	}
 }
+
+func TestTheDocumentedMountServesTheMetadataAndGuardsOnlyTheResource(t *testing.T) {
+	s := newMCP(t)
+	defer s.reporter.Close(context.Background())
+	guard := must(nethttp.MCPGuard(nethttp.MCPGuardOptions{
+		Verifier: verifier(t, mcpResource),
+		Metadata: s.metadata,
+		Tools:    map[string]string{"classify": "classify:run"},
+		Reporter: s.reporter,
+	}))
+	do := func(h http.Handler, method, path, auth, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	metadataPath := "/.well-known/oauth-protected-resource/mcp"
+
+	// The mount of docs/go.md: the guard wraps the whole mux.
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", s.server)
+	mux.HandleFunc("POST /health", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
+	mux.HandleFunc("POST /mcpx", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
+	h := guard(mux)
+
+	res := do(h, "POST", "/mcp", "", "{}")
+	if res.Code != 401 || res.Header().Get("WWW-Authenticate") != s.metadata.Challenge("") {
+		t.Fatalf("no token: %d %v", res.Code, res.Header())
+	}
+	if !strings.HasSuffix(s.metadata.URL(), metadataPath) {
+		t.Fatalf("the 401 points at %s", s.metadata.URL())
+	}
+	if res := do(h, "GET", metadataPath, "", ""); res.Code != 200 || res.Body.String() != string(s.metadata.Document()) {
+		t.Fatalf("metadata: %d %s", res.Code, res.Body)
+	}
+	for _, path := range []string{"/health", "/mcpx"} {
+		if res := do(h, "POST", path, "", "not JSON"); res.Code != 200 || res.Body.String() != "ok" {
+			t.Fatalf("%s is outside the resource: %d %s", path, res.Code, res.Body)
+		}
+	}
+	if res := do(h, "POST", "/mcp", mcpToken(), `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"classify"}}`); res.Code != 200 {
+		t.Fatalf("tool call: %d %s", res.Code, res.Body)
+	}
+
+	// With the guard on the /mcp route alone, the mux never sends it the
+	// metadata path.
+	routeOnly := http.NewServeMux()
+	routeOnly.Handle("/mcp", guard(s.server))
+	if res := do(routeOnly, "GET", metadataPath, "", ""); res.Code != 404 {
+		t.Fatalf("route-only mount served the metadata: %d", res.Code)
+	}
+}
