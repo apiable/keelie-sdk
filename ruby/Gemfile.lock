@@ -59,11 +59,12 @@ GEM
       regexp_parser (~> 2.0)
       simpleidn (~> 0.2)
     logger (1.7.0)
-    loofah (2.25.2)
+    loofah (2.25.3)
       crass (~> 1.0.2)
-      nokogiri (>= 1.12.0)
+      nokogiri (>= 1.19.5)
     mcp (1.8.0)
       json_schemer (>= 2.4)
+    mini_portile2 (2.8.9)
     minitest (6.0.6)
       drb (~> 2.0)
       prism (~> 1.5)
@@ -73,9 +74,12 @@ GEM
     net-protocol (0.4.0)
       timeout
     nio4r (2.7.5)
-    nokogiri (1.19.4-arm64-darwin)
+    nokogiri (1.19.7)
+      mini_portile2 (~> 2.8.2)
       racc (~> 1.4)
-    nokogiri (1.19.4-x86_64-linux-gnu)
+    nokogiri (1.19.7-arm64-darwin)
+      racc (~> 1.4)
+    nokogiri (1.19.7-x86_64-linux-gnu)
       racc (~> 1.4)
     prism (1.9.0)
     puma (8.0.2)
@@ -113,10 +117,10 @@ DEPENDENCIES
   crass (= 1.0.7)
   faraday (= 2.15.0)
   keelie!
-  loofah (= 2.25.2)
+  loofah (= 2.25.3)
   mcp (= 1.8.0)
   minitest (= 6.0.6)
-  nokogiri (= 1.19.4)
+  nokogiri (= 1.19.7)
   puma (= 8.0.2)
   rack (= 3.2.7)
   rack-test (= 2.2.0)
@@ -143,14 +147,16 @@ CHECKSUMS
   json_schemer (2.5.0) sha256=2f01fb4cce721a4e08dd068fc2030cffd0702a7f333f1ea2be6e8991f00ae396
   keelie (0.0.1)
   logger (1.7.0) sha256=196edec7cc44b66cfb40f9755ce11b392f21f7967696af15d274dde7edff0203
-  loofah (2.25.2) sha256=2007f746959ac65552456e04b433e83deb22759ab38c838b4445c70e43425918
+  loofah (2.25.3) sha256=545f14eef0cc2a7de80df560530d593232b7c07e515c5c4e37532d9cb5b0185c
   mcp (1.8.0) sha256=297d449e4e7da6acb0924b323dac5a50475cdce1791fc6fba844e7d13ad90ec3
+  mini_portile2 (2.8.9) sha256=0cd7c7f824e010c072e33f68bc02d85a00aeb6fce05bb4819c03dfd3c140c289
   minitest (6.0.6) sha256=153ea36d1d987a62942382b61075745042a2b3123b1cd48f4c3675af9cc7d6f1
   net-http (0.10.0) sha256=1a2ff6e37a05724973c43f2bf7bf105f59c36a4cd0a7e9b1c021a0a566987c27
   net-protocol (0.4.0) sha256=f9f90c8c6f64794a45160bf422177a336db12809de3beeeaa26b88fcd2e8c853
   nio4r (2.7.5) sha256=6c90168e48fb5f8e768419c93abb94ba2b892a1d0602cb06eef16d8b7df1dca1
-  nokogiri (1.19.4-arm64-darwin) sha256=a46db9853286e6597b36ebc6953817d15acf3a299583eb3f89fdc6f91dd63527
-  nokogiri (1.19.4-x86_64-linux-gnu) sha256=379fae440b28915e3f19d752ce2dcf8465ed2b2fbefd2a7ca0dd497bc981a06a
+  nokogiri (1.19.7) sha256=abe94507c54cb18f872777b16bdca4aad32b1abdc4c52fe843f1c80fbdf992b8
+  nokogiri (1.19.7-arm64-darwin) sha256=f27d7f25f4873fbc3aa35a2cc2fb680c98555fec1925348da439d0869d541142
+  nokogiri (1.19.7-x86_64-linux-gnu) sha256=25865ccb462f714e712fdf8906fde07849cb6704a808e3d629d75baa5af5dd3b
   prism (1.9.0) sha256=7b530c6a9f92c24300014919c9dcbc055bf4cdf51ec30aed099b06cd6674ef85
   puma (8.0.2) sha256=c8ed871dfbbe66448ea9ffd46692342d9804d4071522b52b5331b7b6e7b686fb
   racc (1.8.1) sha256=4a7f6929691dbec8b5209a0b373bc2614882b55fc5d2e447a21aaa691303d62f
