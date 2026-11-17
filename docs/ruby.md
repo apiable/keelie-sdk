@@ -166,7 +166,8 @@ the same as in Python:
 
 The reason for each token is the reason the Python SDK gives for it. The Python SDK reads a token
 with PyJWT, so this class reads it by PyJWT's rules: a `jti` or a `sub` that is not a string is
-`:malformed`, for example.
+`:malformed`, for example. The tests check more than 100 edge-case tokens against the reasons the Python SDK
+gave them, in `ruby/test/fixtures/pyjwt_parity.json`.
 
 ### `verifier.status -> :connected | :degraded | :offline`
 
@@ -244,7 +245,9 @@ dot segments resolved, with its doubled slashes folded, with backslashes read as
 format extension such as `.json`, and without case. Rails serves `/v1.json` and `//v1/orders/42`
 with the routes for `/v1` and `/v1/orders/42`, and rack-protection, which Sinatra runs, resolves
 `/x/..%2fv1` to `/v1`. The guard checks the token of each. It can only guard more than your router serves,
-never less.
+never less. A path longer than 256 bytes with an escape, a dot, a backslash or a doubled slash,
+or one that does not start with a slash, needs a token wherever it points: the guard does not spend
+the time to make its forms.
 
 The verifier's `audience` must be the `resource` of the metadata, or the guard raises
 `ArgumentError` when it is made.
@@ -507,6 +510,6 @@ sign a token with another key, or with `exp` in the past.
 | Path comparison | As the ASGI server gives it | Every form a Rack router could route, without case |
 | A `resource` that ends in an empty query or fragment, such as `https://api.example.com/v1?` | Accepted | Refused, as in Node |
 | An RSA key under 2048 bits in the key set | Loaded | Skipped, with a log line, as in Node |
-| JSON nested deeply in an MCP body | Refused at Python's recursion limit: about 1000 on Python 3.9, far deeper on 3.12 | Refused deeper than 1000, as in Node |
+| JSON nested deeply in a token or an MCP body | Refused at Python's recursion limit: about 1000 on Python 3.9, far deeper on 3.12 | Refused deeper than 1000. In an MCP body, as in Node |
 | When a tool call is counted | When the server starts a `2xx` response | When the Rack app returns a `2xx` status, before the body is sent |
 | Logs | The `logging` module, logger `apiable` | `Keelie.logger`. The same event names. |

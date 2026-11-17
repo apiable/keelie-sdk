@@ -120,6 +120,47 @@ class RackTest < Minitest::Test
     assert_equal ["/health"], Keelie::Rack.forms("/health").uniq
   end
 
+  def test_makes_no_forms_of_a_plain_path
+    assert_equal ["/v1/orders/42"], Keelie::Rack.forms("/v1/orders/42")
+    %w[/v1/orders/42.json /v1/%2e /v1//a /v1\\a v1/a].each { refute Keelie::Rack.plain?(_1), _1 }
+  end
+
+  # The forms of a long path cost too much time, before any token is checked. A long
+  # path that a router could read in another form is guarded, wherever it points.
+  def test_guards_a_long_crafted_path_quickly
+    crafted = "/a/#{"%2e%2e/" * 1100}#{"/" * 400}v1/orders/42"
+    assert_operator crafted.bytesize, :>, 8000
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    100.times { assert Keelie::Rack.guarded?("GET", crafted, @metadata) }
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - elapsed
+    # About 0.01 ms a path. Making every form took about 7 ms.
+    assert_operator elapsed, :<, 0.1, "100 crafted paths took #{(elapsed * 1000).round} ms"
+
+    assert_equal 401, get(crafted).status
+    assert_equal 200, get(crafted, "Bearer #{sign(@pair)}").status
+    # Outside resource, in every form, and still guarded: the guard can guard more, never less.
+    assert_equal 401, get("/health/#{"%2e" * 400}").status
+    # A long plain path is compared as it is.
+    assert_equal 200, get("/health/#{"a" * 8000}").status
+    assert_equal 401, get("/v1/#{"a" * 8000}").status
+    # Up to the limit, every form is compared.
+    near = "/x/#{"%2e%2e/" * 33}v1/orders"
+    assert_operator near.bytesize, :<=, Keelie::Rack::MAX_FORMS_PATH_BYTES
+    assert_includes Keelie::Rack.forms(near), "/v1/orders".b
+    assert_equal 401, get(near).status
+    assert_equal 200, get("/x/#{"%2e%2e/" * 33}health").status
+  end
+
+  # The costliest path that still has its forms made.
+  def test_guards_the_costliest_path_under_the_limit_quickly
+    worst = "/#{"a%252e/.\\" * 30}"[0, Keelie::Rack::MAX_FORMS_PATH_BYTES]
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    20.times { Keelie::Rack.guarded?("GET", worst, @metadata) }
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - elapsed
+    # About 2 ms a path.
+    assert_operator elapsed, :<, 1.0, "20 costly paths took #{(elapsed * 1000).round} ms"
+  end
+
   # A router that serves a path by its most normalized form, without case and without a
   # format extension: Sinatra behind rack-protection resolves "..", "%2e" and "%2f"
   # before the route is matched, Rails drops ".json", Express ignores case.

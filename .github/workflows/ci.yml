@@ -48,3 +48,10 @@ jobs:
           working-directory: ruby
           bundler-cache: true
       - run: bundle exec rake test
+      # The token tests again, outside the bundle, on the json gem Ruby 3.2 ships: 2.6.3.
+      # Only the token tests: the MCP tests need the mcp gem of the bundle.
+      - name: Token tests on the bundled json gem
+        if: matrix.ruby == '3.2'
+        run: >-
+          ruby -Ilib -Itest -e 'require "json"; abort "json #{JSON::VERSION}" if Gem::Version.new(JSON::VERSION) >= Gem::Version.new("2.10");
+          require "./test/tokens_test"; require "./test/pyjwt_parity_test"'

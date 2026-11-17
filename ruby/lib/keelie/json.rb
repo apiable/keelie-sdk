@@ -16,7 +16,8 @@ module Keelie
     # given twice. The json gem's newest releases warn on a key given twice, or refuse
     # it, unless they are told not to.
     # Python's parser refuses a comment; the json gem reads one by default before 3.0
-    # and only has the option to refuse it from 2.20.0. {strict} refuses it on any release.
+    # and only has the option to refuse it from 2.20.0. {strict} and {lenient} refuse it on
+    # any release, by their scan.
     LENIENT = { allow_nan: true }.tap do |options|
       version = Gem::Version.new(JSON::VERSION)
       options[:allow_duplicate_key] = true if version >= Gem::Version.new("2.13.0")
@@ -25,10 +26,60 @@ module Keelie
 
     module_function
 
-    # The value of +text+, read as Python's +json.loads+ reads it. Raises
-    # +JSON::ParserError+ for a text that is not JSON.
+    # The value of +text+, bytes read as Python's +json.loads+ reads bytes. Raises
+    # +JSON::ParserError+ for a text that is not JSON, or is nested deeper than
+    # {MAX_DEPTH}. PyJWT and httpx hand +json.loads+ bytes, so it reads a UTF-16 or
+    # UTF-32 text, and one UTF-8 byte order mark, as Python's +json.detect_encoding+ does.
+    #
+    # The token's header is read with it before the signature is checked, so the caller
+    # writes the text. json gems before 2.10, such as the 2.6.3 that ships with Ruby
+    # 3.2, read arrays by recursion: with no limit, a deep text overflows the stack, and
+    # +SystemStackError+ is no +JSON::ParserError+. Python refuses a deep text too, as
+    # PyJWT's +DecodeError+, at its recursion limit.
+    #
+    # One difference is known: Python reads a lone surrogate, as UTF-8 bytes, in
+    # UTF-16 or as an escape such as "\ud800". Ruby refuses it. Such a token is
+    # +:malformed+ in Ruby: refused, where Python may give another reason.
     def lenient(text)
-      JSON.parse(utf8(text), **LENIENT, max_nesting: false)
+      text = utf8(python_decode(text.b))
+      # The gem's own limit is off by one in some releases. The scan counts exactly,
+      # and refuses what older gems read and Python does not: a comment, an unknown
+      # escape, a control character in a string.
+      value = JSON.parse(text, **LENIENT, max_nesting: MAX_DEPTH + 2)
+      scan(text, keys: false)
+      value
+    end
+
+    BOMS = {
+      "\x00\x00\xFE\xFF".b => "UTF-32", "\xFF\xFE\x00\x00".b => "UTF-32",
+      "\xFE\xFF".b => "UTF-16", "\xFF\xFE".b => "UTF-16"
+    }.freeze
+    private_constant :BOMS
+
+    # +bytes+ as UTF-8, decoded as Python's +json.loads+ decodes bytes.
+    def python_decode(bytes)
+      return bytes.byteslice(3..) if bytes.start_with?("\xEF\xBB\xBF".b)
+
+      encoding = BOMS.find { |bom, _| bytes.start_with?(bom) }&.last || zero_bytes_encoding(bytes)
+      return bytes if encoding.nil?
+
+      bytes.dup.force_encoding(encoding).encode(Encoding::UTF_8)
+    rescue EncodingError
+      raise JSON::ParserError, "not #{encoding}"
+    end
+
+    # The encoding Python reads from the zero bytes at the start of a text with no byte
+    # order mark, or nil for UTF-8.
+    def zero_bytes_encoding(bytes)
+      b0, b1, b2, b3 = bytes.byteslice(0, 4).bytes
+      if bytes.bytesize >= 4
+        return b1.zero? ? "UTF-32BE" : "UTF-16BE" if b0.zero?
+        return b2.zero? && b3.zero? ? "UTF-32LE" : "UTF-16LE" if b1.zero?
+      elsif bytes.bytesize == 2
+        return "UTF-16BE" if b0.zero?
+        return "UTF-16LE" if b1.zero?
+      end
+      nil
     end
 
     # The value of +text+. Raises {DuplicateKey} for a key given twice in one object,
@@ -64,8 +115,9 @@ module Keelie
     # +text+ has been parsed, so the scan only has to track the objects and arrays. It
     # refuses any byte outside a string that JSON does not allow there, so it never reads
     # a text the parser read some other way: a comment, which older json gems read, is
-    # refused at its first "/". Each step moves forward or raises.
-    def scan(text)
+    # refused at its first "/". Each step moves forward or raises. With +keys: false+,
+    # a key given twice passes.
+    def scan(text, keys: true)
       stack = [] # one entry for each open object or array: [keys or nil, expecting a key]
       bytes = text.b
       i = 0
@@ -75,7 +127,7 @@ module Keelie
         if c == 0x22 # a string
           j = string_end(bytes, i)
           top = stack.last
-          if top && top[0] && top[1]
+          if keys && top && top[0] && top[1]
             literal = bytes.byteslice(i, j - i + 1).force_encoding(Encoding::UTF_8)
             key = JSON.parse("[#{literal}]").first
             raise DuplicateKey if top[0].key?(key)
@@ -99,16 +151,35 @@ module Keelie
       end
     end
 
+    # The bytes that may follow a backslash in a string: " \\ / b f n r t u.
+    ESCAPES = '"\\/bfnrtu'.bytes.freeze
+    HEX = "0123456789abcdefABCDEF".bytes.freeze
+    private_constant :ESCAPES, :HEX
+
     # The index of the quote that closes the string opened at +start+. Raises
-    # +JSON::ParserError+ if the text ends first, an escape included.
+    # +JSON::ParserError+ if the text ends first, for a control character, and for an
+    # escape Python does not read: json 2.6.3 reads "\x" as "x".
     def string_end(bytes, start)
       j = start + 1
       loop do
         b = bytes.getbyte(j)
         raise JSON::ParserError, "unterminated string" if b.nil?
         return j if b == 0x22
+        raise JSON::ParserError, "control character in a string" if b < 0x20
 
-        j += b == 0x5c ? 2 : 1
+        if b == 0x5c
+          e = bytes.getbyte(j + 1)
+          raise JSON::ParserError, "invalid escape" unless e && ESCAPES.include?(e)
+          if e == 0x75 # u
+            hex = bytes.byteslice(j + 2, 4).to_s.bytes
+            raise JSON::ParserError, "invalid escape" unless hex.size == 4 && hex.all? { HEX.include?(_1) }
+
+            j += 4
+          end
+          j += 2
+        else
+          j += 1
+        end
       end
     end
   end

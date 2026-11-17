@@ -81,6 +81,27 @@ class TokensTest < Minitest::Test
     @verifier.verify(sign(@pair, {}, "crit" => ["b64"], "b64" => true))
   end
 
+  # json gems before 2.10, such as the 2.6.3 of Ruby 3.2, read arrays by recursion. A
+  # header nested without limit would overflow the stack: a 500, not a 401. A Puma
+  # thread has less stack than the main thread.
+  def test_refuses_a_header_or_a_payload_nested_too_deeply
+    deep = "[" * 100_000 + "]" * 100_000
+    header = %({"alg":"RS256","kid":"key-1","x":#{deep}})
+    token = "#{b64(header)}.#{b64(JSON.generate(claims))}.#{b64("sig")}"
+    assert_rejected :malformed, token
+    assert_equal :malformed, Thread.new { assert_raises(Keelie::TokenRejected) { @verifier.verify(token) }.reason }.value
+    assert_empty @issuer.requests
+
+    input = "#{b64(JSON.generate("alg" => "RS256", "kid" => "key-1"))}.#{b64(%({"exp":1,"x":#{deep}}))}"
+    signed = "#{input}.#{b64(@pair.private_key.sign(OpenSSL::Digest.new("SHA256"), input))}"
+    assert_equal :malformed, Thread.new { assert_raises(Keelie::TokenRejected) { @verifier.verify(signed) }.reason }.value
+
+    # A header nested less deeply still reads.
+    shallow = "[" * 500 + "]" * 500
+    input = "#{b64(%({"alg":"RS256","kid":"key-1","x":#{shallow}}))}.#{b64(JSON.generate(claims))}"
+    @verifier.verify("#{input}.#{b64(@pair.private_key.sign(OpenSSL::Digest.new("SHA256"), input))}")
+  end
+
   def test_refuses_an_unknown_kid
     assert_rejected :kid, sign(key_pair("key-2", index: 1))
   end

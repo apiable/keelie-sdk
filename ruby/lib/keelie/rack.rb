@@ -41,7 +41,8 @@ module Keelie
     # as sent, with its escapes read, its dot segments resolved and its doubled slashes
     # folded, without a format extension such as +.json+, and without case. A request
     # that is under +resource+ in any of these forms is guarded. The guard can only
-    # guard more than your router serves, never less.
+    # guard more than your router serves, never less. A path longer than
+    # {MAX_FORMS_PATH_BYTES} that has more than one form is guarded wherever it points.
     class Guard
       def initialize(app, verifier:, metadata:)
         if verifier.audience != metadata.resource
@@ -248,6 +249,10 @@ module Keelie
 
     # The most forms of one path the guard compares, besides the fully normalized one.
     MAX_FORMS = 128
+    # The longest path whose forms the guard makes. A longer path that a router could
+    # read in another form is guarded, wherever it points: making its forms would cost
+    # each request too much time, before any token is checked.
+    MAX_FORMS_PATH_BYTES = 256
 
     class << self
       # @api private
@@ -272,6 +277,8 @@ module Keelie
         prefixes = [metadata.prefix, unescape(metadata.prefix)].map { _1.downcase(:ascii) }.uniq
         return true if prefixes.include?("")
 
+        return true if path.bytesize > MAX_FORMS_PATH_BYTES && !plain?(path)
+
         forms(path).any? do |form|
           form = form.downcase(:ascii)
           prefixes.any? { |prefix| form == prefix || form.start_with?("#{prefix}/") }
@@ -284,12 +291,23 @@ module Keelie
       # them made until nothing changes.
       def forms(path)
         path = path.to_s.b
+        # Every step leaves a plain path as it is.
+        return [path] if plain?(path)
+
         seen = Set[path]
         queue = [path]
         until queue.empty? || seen.size >= MAX_FORMS
           steps(queue.shift).each { |form| queue << form if seen.add?(form) }
         end
         seen.to_a + normalized(path)
+      end
+
+      # @api private
+      # True for a path that has one form only: it starts with a slash, and has no
+      # escape, no dot, no backslash and no doubled slash.
+      def plain?(path)
+        path = path.to_s.b
+        path.start_with?("/") && !path.include?("//") && !path.match?(/[%.\\]/n)
       end
 
       # @api private
