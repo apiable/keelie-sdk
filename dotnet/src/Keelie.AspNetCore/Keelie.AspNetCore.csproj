@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Keelie.AspNetCore</RootNamespace>
+    <PackageId>Keelie.AspNetCore</PackageId>
+    <Description>The ASP.NET Core adapters of the Keelie SDK, by Apiable: a token guard for a REST API, a per-route scope check, a guard for a Streamable HTTP MCP server, and the AI Catalog. In development, not released.</Description>
+    <PackageTags>keelie;apiable;aspnetcore;oauth;mcp</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../Keelie/Keelie.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="/" />
+    <None Include="../../NOTICE" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

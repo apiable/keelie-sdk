@@ -1,0 +1,17 @@
+<Project>
+  <!-- One exact version of each package, for every project. Each was published at least two weeks
+       before it was added. The lock files pin the packages these bring with them. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The library. A plain version, not a bracketed one: the package asks for 8.0.3 or later, so an
+         app on a later Microsoft.Extensions release can use it. This build resolves exactly 8.0.3. -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
+    <!-- The tests only. -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="[18.0.1]" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="[2.2.0]" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="[3.1.5]" />
+    <PackageVersion Include="xunit.v3" Version="[3.2.2]" />
+  </ItemGroup>
+</Project>

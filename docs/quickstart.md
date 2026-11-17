@@ -6,6 +6,7 @@ with a Consumer's token gets your answer.
 
 You need Python 3.9 or later, an API on FastAPI or another ASGI framework, `curl` and `jq`.
 On Node and Express, do steps 1 and 2 here, then follow the [Node reference](node.md#get-started-with-express).
+On .NET and ASP.NET Core, do steps 1 and 2 here, then follow the [.NET reference](dotnet.md#get-started-with-aspnet-core).
 
 The SDK needs https for your API and for the issuer. Test it against a hosted keelie, not a local
 stack, which serves plain http.
@@ -324,6 +325,7 @@ with the same `outcome_id`: keelie burns it once.
 - [Node SDK reference](node.md): the same for Node and Express.
 - [Go SDK reference](go.md): the Go module and its `net/http` middleware.
 - [Ruby SDK reference](ruby.md): the Ruby gem, for Rack and Rails.
+- [.NET SDK reference](dotnet.md): the same for .NET and ASP.NET Core.
 - [When keelie is down](when-keelie-is-down.md): what the SDK does in each failure.
 
 ## The keelie contract

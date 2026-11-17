@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Keelie.AspNetCore/Keelie.AspNetCore.csproj" />
+    <Project Path="src/Keelie/Keelie.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/Keelie.Tests/Keelie.Tests.csproj" />
+  </Folder>
+</Solution>

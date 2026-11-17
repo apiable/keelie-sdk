@@ -100,3 +100,25 @@ jobs:
         run: >-
           ruby -Ilib -Itest -e 'require "json"; abort "json #{JSON::VERSION}" if Gem::Version.new(JSON::VERSION) >= Gem::Version.new("2.10");
           require "./test/tokens_test"; require "./test/pyjwt_parity_test"'
+
+  dotnet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: ["net8.0", "net10.0"]
+    defaults:
+      run:
+        working-directory: dotnet
+    steps:
+      - uses: actions/checkout@v7
+      # Both SDKs: the .NET 10 SDK builds both targets, and each job runs the tests on one runtime.
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - run: dotnet restore --locked-mode
+      - run: dotnet build --no-restore -warnaserror
+      - run: dotnet test --no-build --framework ${{ matrix.framework }}
