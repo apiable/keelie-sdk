@@ -8,12 +8,11 @@ You need Python 3.9 or later, an API on FastAPI or another ASGI framework, `curl
 
 ## 1. Sign up
 
-Set the address of keelie and of its issuer once. The examples below read them.
+Set the address of keelie and of its token endpoint once. The examples below read them.
 
 ```bash
 KEELIE=https://api.keelie.io
-ISSUER_HOST=$KEELIE
-TOKEN_URL=$ISSUER_HOST/realms/keelie/protocol/openid-connect/token
+TOKEN_URL=$KEELIE/realms/keelie/protocol/openid-connect/token
 ```
 
 Sign up. `slug` is a short name for your company: lowercase letters, digits and hyphens.
