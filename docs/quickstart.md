@@ -10,6 +10,9 @@ On Node and Express, do steps 1 and 2 here, then follow the [Node reference](nod
 The SDK needs https for your API and for the issuer. Test it against a hosted keelie, not a local
 stack, which serves plain http.
 
+> **Go:** steps 1, 2, 6 and 7 are the same. For steps 3 to 5 with `net/http`, follow the
+> [Go reference](go.md#get-started-with-nethttp).
+
 ## 1. Sign up
 
 Set the address of keelie and of its issuer once. The examples below read them.
@@ -316,6 +319,7 @@ with the same `outcome_id`: keelie burns it once.
 
 - [Python SDK reference](python.md): every class, its arguments, its return value and its errors.
 - [Node SDK reference](node.md): the same for Node and Express.
+- [Go SDK reference](go.md): the Go module and its `net/http` middleware.
 - [When keelie is down](when-keelie-is-down.md): what the SDK does in each failure.
 
 ## The keelie contract

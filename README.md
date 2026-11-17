@@ -5,7 +5,8 @@ tokens and scopes inside your own process, and it reports usage.
 
 > **Status: in development. The code here is not released, and it has no stable API yet.**
 > The first release is for Python and any ASGI framework, such as FastAPI. A Node package for
-> Express is in development beside it, in `node/`. Other languages follow.
+> Express, in `node/`, and a Go module, with `net/http` middleware, in `go/`, are in development
+> beside it. Other languages follow.
 > Everything that ships is published here, under the Apache License 2.0, so that you can read what
 > runs in your process instead of taking our word for it.
 
@@ -16,6 +17,7 @@ tokens and scopes inside your own process, and it reports usage.
 | [Quickstart](docs/quickstart.md) | From signup to a protected route, on one page. |
 | [Python SDK reference](docs/python.md) | Every class, its arguments, its return value and its errors. |
 | [Node SDK reference](docs/node.md) | The same for Node and Express, and where Node differs from Python. |
+| [Go SDK reference](docs/go.md) | Every type and function of the Go module, and where Go differs from Python. |
 | [When keelie is down](docs/when-keelie-is-down.md) | What the SDK does in each failure. |
 
 **You can use keelie without this SDK.** The token is a standard JWT, and the usage API is plain
@@ -47,6 +49,7 @@ with each keelie release.
 |---|---|
 | [`python/`](python/) | The Python package `apiable`. On PyPI today it is a placeholder that reserves the name. |
 | [`node/`](node/) | The Node package `keelie`, with adapters for Express. Not released; the name is held on npm. |
+| [`go/`](go/) | The Go module `github.com/apiable/keelie-sdk/go`. Not tagged yet. |
 | [`docs/`](docs/) | The documentation. |
 
 ## Security
