@@ -30,6 +30,27 @@ jobs:
       - run: uv sync --locked
       - run: uv run --locked pytest
 
+  node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "26"]
+    defaults:
+      run:
+        working-directory: node
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: node/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
   go:
     runs-on: ubuntu-latest
     timeout-minutes: 10
