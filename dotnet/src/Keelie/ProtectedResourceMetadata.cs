@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 
 namespace Keelie;
@@ -37,7 +36,7 @@ public sealed class ProtectedResourceMetadata
     /// </summary>
     /// <exception cref="ArgumentException">
     /// An address is not https, has no host, has a user, a query, a fragment or a final slash, or an
-    /// uppercase scheme or host; or a scope is not exactly one scope.
+    /// uppercase scheme or host; or a scope is not exactly one scope, or holds a lone surrogate.
     /// </exception>
     public ProtectedResourceMetadata(string resource, string authorizationServer, IEnumerable<string>? scopesSupported = null)
     {
@@ -50,31 +49,31 @@ public sealed class ProtectedResourceMetadata
         // From the configuration, never from the request's Host.
         Url = $"https://{parts.Netloc}{Path}";
 
-        var document = new StringBuilder("{\"resource\":");
-        Compat.WriteJsonString(document, Resource);
-        document.Append(",\"authorization_servers\":[");
-        Compat.WriteJsonString(document, issuer);
-        document.Append("],\"bearer_methods_supported\":[\"header\"]");
-        if (scopesSupported is not null)
+        var scopes = scopesSupported?.ToArray();
+        // A lone surrogate is no text: the JSON writer would turn it into U+FFFD, another scope.
+        if (scopes is not null && !scopes.All(scope => Compat.IsOneScope(scope) && Compat.IsWellFormed(scope)))
         {
-            var scopes = scopesSupported.ToArray();
-            if (!scopes.All(Compat.IsOneScope))
-            {
-                throw new ArgumentException($"not one scope each: {JsonSerializer.Serialize(scopes)}", nameof(scopesSupported));
-            }
-            document.Append(",\"scopes_supported\":[");
-            for (var i = 0; i < scopes.Length; i++)
-            {
-                if (i > 0)
-                {
-                    document.Append(',');
-                }
-                Compat.WriteJsonString(document, scopes[i]);
-            }
-            document.Append(']');
+            throw new ArgumentException($"not one scope each: {JsonSerializer.Serialize(scopes)}", nameof(scopesSupported));
         }
-        document.Append('}');
-        Document = document.ToString();
+        Document = Compat.WriteJson(writer =>
+        {
+            writer.WriteString("resource", Resource);
+            writer.WriteStartArray("authorization_servers");
+            writer.WriteStringValue(issuer);
+            writer.WriteEndArray();
+            writer.WriteStartArray("bearer_methods_supported");
+            writer.WriteStringValue("header");
+            writer.WriteEndArray();
+            if (scopes is not null)
+            {
+                writer.WriteStartArray("scopes_supported");
+                foreach (var scope in scopes)
+                {
+                    writer.WriteStringValue(scope);
+                }
+                writer.WriteEndArray();
+            }
+        });
     }
 
     /// <summary>Your API's address, as given.</summary>

@@ -129,6 +129,22 @@ internal static class Tokens
         return $"{input}.{Base64Url(signature)}";
     }
 
+    /// <summary>The raw member <c>"x":"\xFF"</c>: a string of invalid UTF-8.</summary>
+    public static byte[] InvalidUtf8Member => [.. "\"x\":\""u8, 0xFF, .. "\""u8];
+
+    /// <summary>The raw member <c>"x":"\ud800"</c>: an escaped lone surrogate, which no .NET string can make.</summary>
+    public static byte[] LoneSurrogateMember => "\"x\":\"\\ud800\""u8.ToArray();
+
+    /// <summary>A token whose payload is the standard claims with <paramref name="member"/> in front, as raw JSON, signed with <paramref name="key"/>.</summary>
+    public static string SignWithRawMember(TestKey key, byte[] member)
+    {
+        var claims = JsonSerializer.SerializeToUtf8Bytes(Claims());
+        byte[] payload = [.. "{"u8, .. member, .. ","u8, .. claims.AsSpan(1)];
+        var input = $"{Part(new Dictionary<string, object?> { ["alg"] = "RS256", ["typ"] = "JWT", ["kid"] = key.Kid })}.{Base64Url(payload)}";
+        var signature = key.Rsa.SignData(Encoding.ASCII.GetBytes(input), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        return $"{input}.{Base64Url(signature)}";
+    }
+
     /// <summary>A token with any header and a made-up signature, for the checks that run before a key is fetched.</summary>
     public static string Unsigned(Dictionary<string, object?> header, Dictionary<string, object?>? overrides = null) =>
         $"{Part(header)}.{Part(Claims(overrides))}.{Base64Url("sig"u8.ToArray())}";
@@ -191,7 +207,9 @@ internal sealed class FakeIssuer : HttpMessageHandler
         if (url == JwksUri)
         {
             Interlocked.Increment(ref JwksFetches);
-            return Json(new { keys = Keys });
+            // A RawJwk goes out as written, for JSON that no .NET value serializes to.
+            var keys = Keys.Select(key => key is RawJwk raw ? raw.Json : JsonSerializer.Serialize(key));
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent($"{{\"keys\":[{string.Join(',', keys)}]}}") };
         }
         return new HttpResponseMessage(HttpStatusCode.NotFound);
     }
@@ -205,6 +223,9 @@ internal sealed class FakeIssuer : HttpMessageHandler
     public static HttpResponseMessage Json(object value) =>
         new(HttpStatusCode.OK) { Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(value)) };
 }
+
+/// <summary>A key of the key set as raw JSON text.</summary>
+internal sealed record RawJwk(string Json);
 
 /// <summary>The issuer of most tests: one signing key, and keys that must verify nothing beside it.</summary>
 internal static class StandardIssuer
@@ -275,6 +296,9 @@ internal sealed class FakeKeelie : HttpMessageHandler
 
     public string? ProblemType { get; set; }
 
+    /// <summary>The body of a refusal as it is, in place of the one made from <see cref="ProblemType"/>.</summary>
+    public byte[]? ProblemBody { get; set; }
+
     /// <summary>While set and not completed, every request waits.</summary>
     public TaskCompletionSource? Hold { get; set; }
 
@@ -309,7 +333,7 @@ internal sealed class FakeKeelie : HttpMessageHandler
             return FakeIssuer.Json(new { accepted = 1, duplicates = 0 });
         }
         object problem = ProblemType is null ? new { } : new { type = ProblemType, status };
-        return new HttpResponseMessage((HttpStatusCode)status) { Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(problem)) };
+        return new HttpResponseMessage((HttpStatusCode)status) { Content = new ByteArrayContent(ProblemBody ?? JsonSerializer.SerializeToUtf8Bytes(problem)) };
     }
 }
 

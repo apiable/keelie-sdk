@@ -50,6 +50,11 @@ internal static class StrictJson
                             frame.Duplicate = true;
                         }
                         break;
+                    case JsonTokenType.String when reader.ValueIsEscaped:
+                        // An escaped lone surrogate, such as "\ud800", parses, and GetString()
+                        // throws later, in the guard or in your server.
+                        _ = reader.GetString();
+                        break;
                     case JsonTokenType.EndObject:
                         if (frames.Pop().Duplicate)
                         {

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -187,50 +188,77 @@ internal static class Compat
     }
 
     /// <summary>
-    /// A JSON string as Python's <c>json.dumps</c> writes it: every character outside ASCII, and
-    /// every control character, escaped.
+    /// One JSON object, written by <paramref name="members"/>. Every character outside ASCII is
+    /// escaped, as Python's <c>json.dumps</c> does, and so are a few ASCII ones such as <c>+</c>.
     /// </summary>
-    internal static void WriteJsonString(StringBuilder output, string value)
+    internal static string WriteJson(Action<Utf8JsonWriter> members)
     {
-        output.Append('"');
-        foreach (var c in value)
+        var output = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(output))
         {
-            switch (c)
+            writer.WriteStartObject();
+            members(writer);
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(output.WrittenSpan);
+    }
+
+    /// <summary>
+    /// True if every string and every key in <paramref name="element"/> reads as text. The parser
+    /// takes an escaped lone surrogate, such as <c>"\ud800"</c>, and <c>GetString()</c> then throws.
+    /// </summary>
+    internal static bool AllText(JsonElement element)
+    {
+        try
+        {
+            return Walk(element);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+
+        static bool Walk(JsonElement element)
+        {
+            switch (element.ValueKind)
             {
-                case '"':
-                    output.Append("\\\"");
-                    break;
-                case '\\':
-                    output.Append("\\\\");
-                    break;
-                case '\n':
-                    output.Append("\\n");
-                    break;
-                case '\r':
-                    output.Append("\\r");
-                    break;
-                case '\t':
-                    output.Append("\\t");
-                    break;
-                case '\b':
-                    output.Append("\\b");
-                    break;
-                case '\f':
-                    output.Append("\\f");
-                    break;
+                case JsonValueKind.String:
+                    _ = element.GetString();
+                    return true;
+                case JsonValueKind.Object:
+                    foreach (var property in element.EnumerateObject())
+                    {
+                        _ = property.Name;
+                        Walk(property.Value);
+                    }
+                    return true;
+                case JsonValueKind.Array:
+                    foreach (var item in element.EnumerateArray())
+                    {
+                        Walk(item);
+                    }
+                    return true;
                 default:
-                    if (c < ' ' || c > '~')
-                    {
-                        output.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
-                    }
-                    else
-                    {
-                        output.Append(c);
-                    }
-                    break;
+                    return true;
             }
         }
-        output.Append('"');
+    }
+
+    /// <summary>True if <paramref name="value"/> has no lone surrogate, so it is text that UTF-8 can carry.</summary>
+    internal static bool IsWellFormed(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsHighSurrogate(value[i]) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+            {
+                i++;
+            }
+            else if (char.IsSurrogate(value[i]))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /// <summary>The number of characters in <paramref name="value"/>, as Python counts them: code points.</summary>

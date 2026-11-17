@@ -182,6 +182,42 @@ public sealed class UsageTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_refusal_with_invalid_utf8_is_dropped_and_never_sent_again()
+    {
+        _keelie.Answers.Enqueue(400);
+        _keelie.ProblemBody = [.. "{\"type\":\"https://x/"u8, 0xFF, .. "\"}"u8];
+        var reporter = Reporter(batchSize: 1, intervalSeconds: 0.02);
+
+        reporter.Record(ClientId, "GET /orders");
+        reporter.Record(ClientId, "GET /orders");
+        await Wait.UntilAsync(() => _keelie.Requests.Count == 2);
+        await Task.Delay(100);
+
+        var batches = _keelie.Batches();
+        Assert.NotEqual(batches[0][0]["idempotency_key"], batches[1][0]["idempotency_key"]);
+        Assert.Equal(2, _keelie.Requests.Count);
+        Assert.Contains("apiable.usage_dropped events=1 status=400 type=unknown", LogCapture.Text, StringComparison.Ordinal);
+        await reporter.CloseAsync();
+    }
+
+    [Fact]
+    public async Task An_event_escapes_all_but_ascii_and_keeps_its_values()
+    {
+        var reporter = Reporter(batchSize: 1);
+
+        reporter.Record("client-ü", "GET /orders/{id}?a=1&b=<2>+'3'", credits: 1.5m);
+        await reporter.CloseAsync();
+
+        var body = Assert.Single(_keelie.Requests).Body;
+        Assert.True(body.All(char.IsAscii), body);
+        var sent = Assert.Single(Assert.Single(_keelie.Batches()));
+        Assert.Equal("client-ü", sent["client_id"]);
+        Assert.Equal("GET /orders/{id}?a=1&b=<2>+'3'", sent["capability_key"]);
+        Assert.Equal("1.5", sent["credits"]);
+        Assert.EndsWith("+00:00", sent["ts"], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_full_buffer_drops_the_oldest_event()
     {
         var reporter = Reporter(batchSize: 2, maxBuffered: 2);
@@ -235,6 +271,10 @@ public sealed class UsageTests : IAsyncLifetime
         // Each repeat of an outcome with no ID would burn the balance again.
         "outcome with credits and no id",
         "outcome_id empty",
+        // A lone surrogate would reach keelie as U+FFFD, another name.
+        "capability_key with a lone surrogate",
+        "client_id with a lone surrogate",
+        "outcome_id with a lone surrogate",
     ];
 
     [Theory]
@@ -256,6 +296,9 @@ public sealed class UsageTests : IAsyncLifetime
             case "outcome_id on a request": reporter.Record(ClientId, "GET /orders", UsageUnit.Request, outcomeId: "job-1"); break;
             case "outcome with credits and no id": reporter.Record(ClientId, "GET /orders", UsageUnit.Outcome, credits: 10); break;
             case "outcome_id empty": reporter.Record(ClientId, "GET /orders", UsageUnit.Outcome, outcomeId: ""); break;
+            case "capability_key with a lone surrogate": reporter.Record(ClientId, "GET /orders/\ud800"); break;
+            case "client_id with a lone surrogate": reporter.Record("client-\udc00", "GET /orders"); break;
+            case "outcome_id with a lone surrogate": reporter.Record(ClientId, "GET /orders", UsageUnit.Outcome, outcomeId: "job-\ud800-1"); break;
             default: throw new ArgumentException(name);
         }
         reporter.Record(ClientId, "GET /orders");

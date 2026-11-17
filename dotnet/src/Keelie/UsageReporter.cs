@@ -220,29 +220,23 @@ public sealed class UsageReporter : IAsyncDisposable
         }
 
         var key = outcomeId is null ? Guid.NewGuid() : Uuid5.Create(KeelieOutcomeNamespace, outcomeId);
-        var json = new StringBuilder("{\"idempotency_key\":");
-        Compat.WriteJsonString(json, key.ToString("D"));
-        json.Append(",\"client_id\":");
-        Compat.WriteJsonString(json, clientId);
-        json.Append(",\"capability_key\":");
-        Compat.WriteJsonString(json, capabilityKey);
-        json.Append(",\"unit\":");
-        Compat.WriteJsonString(json, unitName!);
-        json.Append(",\"quantity\":");
-        Compat.WriteJsonString(json, amount!);
-        json.Append(",\"ts\":");
-        Compat.WriteJsonString(json, DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.ffffff'+00:00'", CultureInfo.InvariantCulture));
-        if (cost is not null)
+        var json = Compat.WriteJson(writer =>
         {
-            json.Append(",\"credits\":");
-            Compat.WriteJsonString(json, cost);
-        }
-        if (consumerId is { } consumer)
-        {
-            json.Append(",\"consumer_id\":");
-            Compat.WriteJsonString(json, consumer.ToString("D"));
-        }
-        json.Append('}');
+            writer.WriteString("idempotency_key", key.ToString("D"));
+            writer.WriteString("client_id", clientId);
+            writer.WriteString("capability_key", capabilityKey);
+            writer.WriteString("unit", unitName);
+            writer.WriteString("quantity", amount);
+            writer.WriteString("ts", DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.ffffff'+00:00'", CultureInfo.InvariantCulture));
+            if (cost is not null)
+            {
+                writer.WriteString("credits", cost);
+            }
+            if (consumerId is { } consumer)
+            {
+                writer.WriteString("consumer_id", consumer.ToString("D"));
+            }
+        });
 
         bool full;
         lock (_gate)
@@ -257,7 +251,7 @@ public sealed class UsageReporter : IAsyncDisposable
                 _events.RemoveFirst();
                 _dropped++;
             }
-            _events.AddLast(json.ToString());
+            _events.AddLast(json);
             full = _events.Count >= _batchSize;
             _task ??= Task.Run(RunAsync);
         }
@@ -531,7 +525,8 @@ public sealed class UsageReporter : IAsyncDisposable
                 return false;
             }
         }
-        return true;
+        // A lone surrogate is no text: the JSON writer would turn it into U+FFFD, another name.
+        return Compat.IsWellFormed(name);
     }
 
     /// <summary>
@@ -575,7 +570,7 @@ public sealed class UsageReporter : IAsyncDisposable
             // keelie's codes are short and plain. Anything else stays out of the log.
             return ProblemCode.IsMatch(code) ? code : "unknown";
         }
-        catch (Exception error) when (error is JsonException or HttpRequestException or IOException or OperationCanceledException)
+        catch (Exception error) when (error is JsonException or InvalidOperationException or HttpRequestException or IOException or OperationCanceledException)
         {
             return "unknown";
         }

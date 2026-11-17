@@ -143,6 +143,15 @@ public sealed class TokenTests
             { "four parts", "malformed" },
             { "padding junk", "malformed" },
             { "payload not an object", "malformed" },
+            { "header not UTF-8", "malformed" },
+            { "payload not UTF-8", "malformed" },
+            // The payload is read only after the signature, as PyJWT reads it.
+            { "payload not UTF-8, other signer", "signature" },
+            // PyJWT reads these, and refuses for the kid or the alg. The .NET reader cannot.
+            { "kid a lone surrogate", "malformed" },
+            { "alg a lone surrogate", "malformed" },
+            { "header key a lone surrogate", "malformed" },
+            { "payload a lone surrogate", "malformed" },
         };
     }
 
@@ -194,6 +203,17 @@ public sealed class TokenTests
             "four parts" => Tokens.Sign(_key) + ".x",
             "padding junk" => Tokens.Sign(_key) + "===",
             "payload not an object" => Tokens.SignPayload(_key, new[] { 1 }),
+            // The header is {"alg":"RS256","kid":"<0xFF>"}.
+            "header not UTF-8" => "eyJhbGciOiJSUzI1NiIsImtpZCI6Iv8ifQ.e30.AA",
+            "payload not UTF-8" => Tokens.SignWithRawMember(_key, Tokens.InvalidUtf8Member),
+            "payload not UTF-8, other signer" => Tokens.SignWithRawMember(new TestKey("sig-1"), Tokens.InvalidUtf8Member),
+            // The header is {"alg":"RS256","kid":"\ud800"}, as written: ASCII, with an escaped lone surrogate.
+            "kid a lone surrogate" => "eyJhbGciOiJSUzI1NiIsImtpZCI6Ilx1ZDgwMCJ9.e30.AA",
+            // The header is {"alg":"\ud800"}.
+            "alg a lone surrogate" => Tokens.Base64Url("{\"alg\":\"\\ud800\"}"u8.ToArray()) + ".e30.AA",
+            // The header is {"alg":"RS256","\udc00":1}.
+            "header key a lone surrogate" => Tokens.Base64Url("{\"alg\":\"RS256\",\"\\udc00\":1}"u8.ToArray()) + ".e30.AA",
+            "payload a lone surrogate" => Tokens.SignWithRawMember(_key, Tokens.LoneSurrogateMember),
             _ => throw new ArgumentException(name),
         };
     }
@@ -251,6 +271,14 @@ public sealed class TokenTests
 
         Assert.Equal(RejectionReason.Kid, await RejectedAsync(Tokens.Sign(small)));
         Assert.Equal("client-1", (await _verifier.VerifyAsync(Tokens.Sign(withPrivate))).Azp);
+    }
+
+    [Fact]
+    public async Task A_key_whose_kid_holds_a_lone_surrogate_is_skipped_and_the_rest_load()
+    {
+        _issuer.Keys.Insert(0, new RawJwk("{\"kid\":\"\\ud800\",\"kty\":\"RSA\",\"n\":\"AQAB\",\"e\":\"AQAB\"}"));
+
+        Assert.Equal("client-1", (await _verifier.VerifyAsync(Tokens.Sign(_key))).Azp);
     }
 
     private const string RealmA = "https://issuer.example.test/realms/01890000-0000-7000-8000-00000000000a";

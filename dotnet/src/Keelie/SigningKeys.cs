@@ -264,9 +264,11 @@ public sealed class SigningKeys
             {
                 continue;
             }
-            var id = kid.GetString()!;
+            string? id = null;
             try
             {
+                // An escaped lone surrogate in the kid throws here: that key is skipped.
+                id = kid.GetString()!;
                 // The public members only: a private member published by mistake is never loaded.
                 var modulus = Base64Url(members, "n");
                 var exponent = Base64Url(members, "e");
@@ -282,10 +284,10 @@ public sealed class SigningKeys
                 }
                 keys[id] = parameters;
             }
-            catch (Exception error) when (error is KeySetError or CryptographicException or FormatException)
+            catch (Exception error) when (error is KeySetError or CryptographicException or FormatException or InvalidOperationException)
             {
                 // A key the SDK cannot load is skipped. The rest of the set loads.
-                Log.Warn(Category, "apiable.key_skipped kid={Kid}", JsonSerializer.Serialize(id));
+                Log.Warn(Category, "apiable.key_skipped kid={Kid}", id is null ? "null" : JsonSerializer.Serialize(id));
             }
         }
         return keys;

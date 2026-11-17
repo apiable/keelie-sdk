@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Keelie.Tests;
 
 public sealed class ScopeTests
@@ -170,8 +172,13 @@ public sealed class DiscoveryTests
     {
         var metadata = new ProtectedResourceMetadata(Resource, Values.Issuer, ["orders:read", "ünï"]);
 
-        Assert.EndsWith(",\"scopes_supported\":[\"orders:read\",\"\\u00fcn\\u00ef\"]}", metadata.Document, StringComparison.Ordinal);
+        // Every character outside ASCII is escaped, as Python's json.dumps does.
+        Assert.True(metadata.Document.All(char.IsAscii), metadata.Document);
+        using var document = JsonDocument.Parse(metadata.Document);
+        Assert.Equal(["orders:read", "ünï"], document.RootElement.GetProperty("scopes_supported").EnumerateArray().Select(s => s.GetString()));
         Assert.Throws<ArgumentException>(() => new ProtectedResourceMetadata(Resource, Values.Issuer, ["orders:read orders:write"]));
+        // A lone surrogate would be published as U+FFFD, another scope.
+        Assert.Throws<ArgumentException>(() => new ProtectedResourceMetadata(Resource, Values.Issuer, ["orders:\ud800"]));
     }
 
     [Theory]

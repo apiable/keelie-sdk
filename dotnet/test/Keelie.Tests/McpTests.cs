@@ -150,6 +150,10 @@ public sealed class McpGuardTests : IAsyncLifetime
             { "1001 deep", Utf8(new string('[', 1001) + new string(']', 1001)), 400, -32700, null },
             { "byte order mark", Utf8("\uFEFF{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"), 400, -32700, null },
             { "two values", Utf8("{} {}"), 400, -32700, null },
+            // An escaped lone surrogate parses, and no .NET string can hold it.
+            { "method a lone surrogate", Utf8("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"\\ud800\"}"), 400, -32700, null },
+            { "tool name a lone surrogate", Utf8("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"\\udc00\"}}"), 400, -32700, null },
+            { "id a lone surrogate", Utf8("{\"jsonrpc\":\"2.0\",\"id\":\"\\ud800\",\"method\":\"tools/call\",\"params\":{\"name\":\"cancel_order\"}}"), 400, -32700, null },
             { "a batch", Utf8("[" + Call("get_order") + "]"), 400, -32600, null },
             { "a number", Utf8("1"), 400, -32600, null },
             { "a string", Utf8("\"just a string\""), 400, -32600, null },

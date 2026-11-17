@@ -535,4 +535,10 @@ test can move the clock of the key-set refresh and of the catalog cache. The pac
 | `unit` | A string | A `UsageUnit` |
 | `consumer_id` passed to `record()` | A `UUID` or its `str`, checked | A `Guid?`: a value that is not a UUID cannot be passed |
 | The `ts` of an event | ISO 8601, with microseconds when they are not zero | ISO 8601, always with six decimal places |
+| A lone surrogate (half of a UTF-16 pair) in `client_id`, `capability_key` or a scope | Sent as `\udxxx` | Refused: `apiable.usage_event_invalid` in `Record()`, `ArgumentException` for `scopesSupported`. A .NET string can hold one, and UTF-8 cannot carry it. |
+| A lone surrogate in `outcome_id` | `record()` raises `UnicodeEncodeError` from `uuid5` | Refused, with `apiable.usage_event_invalid`, as any other invalid event |
+| An escaped lone surrogate, such as `"\ud800"`, in a token's header or payload | Read. A `kid` or `alg` with one is refused for `kid` or `algorithm`. | Refused, for `malformed`: the .NET reader cannot read it as a string. The payload is checked after the signature, as in Python. |
+| An escaped lone surrogate in an MCP request body | Passed on | `400`, `-32700` |
+| A key of the issuer's key set with an escaped lone surrogate in its `kid` | The other keys load | Skipped, with `apiable.key_skipped`. The other keys load. |
+| The JSON of an event and of the metadata | `json.dumps`: every character outside ASCII escaped, in lowercase hex | The same, in uppercase hex, and some ASCII characters escaped too, such as `+`, so the `ts` is sent as `...\u002B00:00`. The values are the same. |
 | Logs | The `logging` module, under the logger `apiable` | `Microsoft.Extensions.Logging`, under categories that start with `Keelie`. The same event names. |

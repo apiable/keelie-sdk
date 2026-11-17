@@ -2,6 +2,7 @@ using System.Collections.Frozen;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Unicode;
 
 namespace Keelie;
 
@@ -320,10 +321,16 @@ public sealed class TokenVerifier
 
     private static JsonDocument ParsePayload(byte[] payload)
     {
+        // JsonDocument takes invalid UTF-8 inside a string, and GetString() then throws. The
+        // payload is read only after the signature, as PyJWT reads it.
+        if (!Utf8.IsValid(payload))
+        {
+            throw new TokenRejected(RejectionReason.Malformed);
+        }
         try
         {
             var document = JsonDocument.Parse(payload, JsonOptions);
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            if (document.RootElement.ValueKind != JsonValueKind.Object || !Compat.AllText(document.RootElement))
             {
                 document.Dispose();
                 throw new TokenRejected(RejectionReason.Malformed);
@@ -491,7 +498,9 @@ internal sealed class Jws
             return null;
         }
         var headerBytes = DecodeSegment(bytes.AsSpan(0, first));
-        if (headerBytes is null)
+        // JsonDocument takes invalid UTF-8 inside a string, and GetString() then throws. An
+        // escaped lone surrogate is checked after the parse.
+        if (headerBytes is null || !Utf8.IsValid(headerBytes))
         {
             return null;
         }
@@ -499,7 +508,7 @@ internal sealed class Jws
         try
         {
             using var document = JsonDocument.Parse(headerBytes, JsonOptions);
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            if (document.RootElement.ValueKind != JsonValueKind.Object || !Compat.AllText(document.RootElement))
             {
                 return null;
             }

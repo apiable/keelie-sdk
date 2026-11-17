@@ -252,6 +252,10 @@ public sealed class GuardTests
             data.Add(adapter, "other audience", 401, "invalid_token");
             data.Add(adapter, "other signer", 401, "invalid_token");
             data.Add(adapter, "not a token", 401, "invalid_token");
+            data.Add(adapter, "header not UTF-8", 401, "invalid_token");
+            data.Add(adapter, "payload not UTF-8", 401, "invalid_token");
+            data.Add(adapter, "kid a lone surrogate", 401, "invalid_token");
+            data.Add(adapter, "payload a lone surrogate", 401, "invalid_token");
         }
         return data;
     }
@@ -275,6 +279,11 @@ public sealed class GuardTests
             "other org" => "Bearer " + Keelie.Tests.Tokens.Sign(key, new() { ["org_id"] = Guid.NewGuid().ToString() }),
             "other audience" => "Bearer " + Keelie.Tests.Tokens.Sign(key, new() { ["aud"] = "another-api" }),
             "other signer" => "Bearer " + Keelie.Tests.Tokens.Sign(new TestKey("sig-1")),
+            // The header is {"alg":"RS256","kid":"<0xFF>"}.
+            "header not UTF-8" => "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6Iv8ifQ.e30.AA",
+            "payload not UTF-8" => "Bearer " + Keelie.Tests.Tokens.SignWithRawMember(key, Keelie.Tests.Tokens.InvalidUtf8Member),
+            "kid a lone surrogate" => "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6Ilx1ZDgwMCJ9.e30.AA",
+            "payload a lone surrogate" => "Bearer " + Keelie.Tests.Tokens.SignWithRawMember(key, Keelie.Tests.Tokens.LoneSurrogateMember),
             _ => "Bearer not-a-token",
         };
 
