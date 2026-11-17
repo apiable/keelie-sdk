@@ -30,6 +30,51 @@ jobs:
       - run: uv sync --locked
       - run: uv run --locked pytest
 
+  node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "26"]
+    defaults:
+      run:
+        working-directory: node
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: node/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.24", "1.27"]
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: go/mcptest/go.sum
+      - run: go vet ./...
+      - run: go test -race ./...
+      # A real MCP client and server through the guard. A module of its own: the
+      # official MCP SDK needs Go 1.25, newer than the module's oldest.
+      - if: matrix.go != '1.24'
+        working-directory: go/mcptest
+        run: go vet ./... && go test -race ./...
+
   ruby:
     runs-on: ubuntu-latest
     timeout-minutes: 10

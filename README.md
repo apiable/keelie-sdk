@@ -4,8 +4,10 @@
 tokens and scopes inside your own process, and it reports usage.
 
 > **Status: in development. The code here is not released, and it has no stable API yet.**
-> The first release is for Python and any ASGI framework, such as FastAPI. Other languages follow.
-> A Ruby gem, for any Rack app with a scope check for Rails, is in development in [`ruby/`](ruby/).
+> The first release is for Python and any ASGI framework, such as FastAPI. A Node package for
+> Express, in `node/`, a Go module, with `net/http` middleware, in `go/`, and a Ruby gem, for any
+> Rack app with a scope check for Rails, in `ruby/`, are in development beside it. Other
+> languages follow.
 > Everything that ships is published here, under the Apache License 2.0, so that you can read what
 > runs in your process instead of taking our word for it.
 
@@ -15,6 +17,8 @@ tokens and scopes inside your own process, and it reports usage.
 |---|---|
 | [Quickstart](docs/quickstart.md) | From signup to a protected route, on one page. |
 | [Python SDK reference](docs/python.md) | Every class, its arguments, its return value and its errors. |
+| [Node SDK reference](docs/node.md) | The same for Node and Express, and where Node differs from Python. |
+| [Go SDK reference](docs/go.md) | Every type and function of the Go module, and where Go differs from Python. |
 | [Ruby SDK reference](docs/ruby.md) | The Ruby gem, for Rack and Rails, and where it differs from Python. |
 | [When keelie is down](docs/when-keelie-is-down.md) | What the SDK does in each failure. |
 
@@ -46,6 +50,8 @@ with each keelie release.
 | Folder | What it holds |
 |---|---|
 | [`python/`](python/) | The Python package `apiable`. On PyPI today it is a placeholder that reserves the name. |
+| [`node/`](node/) | The Node package `keelie`, with adapters for Express. Not released; the name is held on npm. |
+| [`go/`](go/) | The Go module `github.com/apiable/keelie-sdk/go`. Not tagged yet. |
 | [`ruby/`](ruby/) | The Ruby gem `keelie`. Not on RubyGems yet. |
 | [`docs/`](docs/) | The documentation. |
 
