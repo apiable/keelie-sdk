@@ -2203,6 +2203,62 @@
         "title": "PlanCreate",
         "type": "object"
       },
+      "PlanPage": {
+        "description": "A page of one product's plans, drafts included, oldest first.",
+        "properties": {
+          "items": {
+            "description": "The plans. Empty when there are none, never absent.",
+            "examples": [
+              [
+                {
+                  "created_at": "2026-09-23T09:41:00Z",
+                  "currency": "usd",
+                  "default_ttl_seconds": 1800,
+                  "id": "01a01e21-6f52-71ff-b46c-fd1b3af0d878",
+                  "name": "Plumbus",
+                  "plan_family_id": "01a01e21-6f52-71ff-b46c-fd1b0000d878",
+                  "pricing": {
+                    "credits_per_period": 10000,
+                    "fee": 4900,
+                    "period": "month"
+                  },
+                  "product_id": "01a01e21-6f52-71ff-b46c-fd16fbe55446",
+                  "published_at": "2026-09-24T09:41:00Z",
+                  "scopes": [],
+                  "status": "published",
+                  "version": 1
+                }
+              ]
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PlanRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass it as `?cursor=` to read the next page. `null` when this page is the last.",
+            "examples": [
+              "AZoB4hb1cf-0bP0W-1VEZg"
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "PlanPage",
+        "type": "object"
+      },
       "PlanPricing": {
         "additionalProperties": false,
         "description": "The `pricing` document. One shape, for every plan.\n\nA monthly fee, an included quantity, and the packs that fill the balance again. Setting\n`fee` and `credits_per_period` to zero is the balance-only plan — the same row and the\nsame code path, not a second kind of plan.",
@@ -2535,6 +2591,179 @@
         "title": "PlanStatus",
         "type": "string"
       },
+      "PlanUpdate": {
+        "additionalProperties": false,
+        "description": "A JSON Merge Patch of a draft plan (RFC 7386).\n\nThe members of `PlanCreate`, and no other: any other member is a 422. A member left out\nstays as it is. Every member but `cost_ceiling` always has a value, so `null` on it is a\n422.",
+        "properties": {
+          "cost_ceiling": {
+            "anyOf": [
+              {
+                "description": "A decimal number, as a string.",
+                "examples": [
+                  "10.5"
+                ],
+                "pattern": "^\\d+(\\.\\d+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The most credits one Consumer on this plan may burn in a UTC calendar month. `null` removes the ceiling.",
+            "examples": [
+              "50000"
+            ],
+            "title": "Cost Ceiling"
+          },
+          "currency": {
+            "description": "The currency of the fee and of every pack price, as an ISO 4217 code.",
+            "examples": [
+              "usd"
+            ],
+            "maxLength": 10,
+            "minLength": 1,
+            "title": "Currency",
+            "type": "string"
+          },
+          "default_ttl_seconds": {
+            "description": "How long a token of this plan lives when the balance is healthy. It is never below the shortest token of the Provider's plan with Apiable.",
+            "examples": [
+              1800
+            ],
+            "maximum": 1800.0,
+            "minimum": 1.0,
+            "title": "Default Ttl Seconds",
+            "type": "integer"
+          },
+          "name": {
+            "description": "What the Consumer sees this plan called.",
+            "examples": [
+              "Wubba Lubba Dub Dub"
+            ],
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/PricingPatch",
+            "description": "The parts of the price to change. A part left out stays as it is.",
+            "examples": [
+              {
+                "fee": 5900
+              }
+            ]
+          },
+          "scopes": {
+            "description": "What the plan sells. Replaces every scope of the plan. Each scope points at routes or tools of the plan's product.",
+            "examples": [
+              [
+                {
+                  "capability_ids": [
+                    "01a01e21-6f52-71ff-b46c-fd170b90378b"
+                  ],
+                  "scope": "portal:write"
+                }
+              ]
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PlanScope"
+            },
+            "maxItems": 50,
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "title": "PlanUpdate",
+        "type": "object"
+      },
+      "PricingPatch": {
+        "additionalProperties": false,
+        "description": "A merge patch of the `pricing` document. A part left out stays as it is.\n\nEvery part but `auto_reload` always has a value, so `null` on it is a 422. `auto_reload:\nnull` removes the defaults. A sent `credit_packs` or `auto_reload` replaces the old one\nwhole.",
+        "properties": {
+          "auto_reload": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoReload"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The defaults for filling the balance by itself. `null` removes them.",
+            "examples": [
+              {
+                "default_pack": 100,
+                "default_threshold": 1000
+              }
+            ]
+          },
+          "credit_packs": {
+            "description": "What a Consumer can buy to fill the balance again. Replaces the old list.",
+            "examples": [
+              [
+                {
+                  "credits": 100,
+                  "price": 7500
+                }
+              ]
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CreditPack"
+            },
+            "maxItems": 20,
+            "title": "Credit Packs",
+            "type": "array"
+          },
+          "credit_rollover": {
+            "description": "Whether credits left at the end of a period survive into the next one.",
+            "examples": [
+              false
+            ],
+            "title": "Credit Rollover",
+            "type": "boolean"
+          },
+          "credits_per_period": {
+            "description": "The credits granted at the start of each period.",
+            "examples": [
+              10000
+            ],
+            "minimum": 0.0,
+            "title": "Credits Per Period",
+            "type": "integer"
+          },
+          "fee": {
+            "description": "The fee for one period, in the minor units of the plan's currency.",
+            "examples": [
+              5900
+            ],
+            "minimum": 0.0,
+            "title": "Fee",
+            "type": "integer"
+          },
+          "negative_balance_seconds": {
+            "description": "The budget for the delay in the usage report, in seconds.",
+            "examples": [
+              60
+            ],
+            "maximum": 300.0,
+            "minimum": 0.0,
+            "title": "Negative Balance Seconds",
+            "type": "integer"
+          },
+          "period": {
+            "const": "month",
+            "description": "How often the fee is taken and the included quantity is granted.",
+            "examples": [
+              "month"
+            ],
+            "title": "Period",
+            "type": "string"
+          }
+        },
+        "title": "PricingPatch",
+        "type": "object"
+      },
       "Problem": {
         "description": "An RFC 9457 problem document.",
         "properties": {
@@ -2728,6 +2957,52 @@
           "url"
         ],
         "title": "ProductCreate",
+        "type": "object"
+      },
+      "ProductPage": {
+        "description": "A page of the Provider's products, oldest first.",
+        "properties": {
+          "items": {
+            "description": "The products. Empty when there are none, never absent. Read one product for the routes or tools it sells.",
+            "examples": [
+              [
+                {
+                  "created_at": "2026-09-22T09:41:00Z",
+                  "id": "01a01e21-6f52-71ff-b46c-fd16fbe55446",
+                  "name": "Portal Gun API",
+                  "status": "draft",
+                  "type": "api",
+                  "url": "https://api.portal-labs.example/openapi.json"
+                }
+              ]
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ProductSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass it as `?cursor=` to read the next page. `null` when this page is the last.",
+            "examples": [
+              "AZoB4hb1cf-0bP0W-1VEZg"
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ProductPage",
         "type": "object"
       },
       "ProductRead": {
@@ -3002,6 +3277,95 @@
         ],
         "title": "ProductStatus",
         "type": "string"
+      },
+      "ProductSummary": {
+        "description": "One product in a list: what it is, without the routes or tools it sells.",
+        "properties": {
+          "created_at": {
+            "description": "When the product was registered.",
+            "examples": [
+              "2026-09-22T09:41:00Z"
+            ],
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the product does, in a few sentences of one paragraph, for an agent that chooses an API. The AI Catalog shows it as the entry's `description`. `null` until set.",
+            "examples": [
+              null
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "description": "The product id.",
+            "examples": [
+              "01a01e21-6f52-71ff-b46c-fd16fbe55446"
+            ],
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "description": "The product's name.",
+            "examples": [
+              "Portal Gun API"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProductStatus",
+            "description": "`draft` until the first of its plans is published.",
+            "examples": [
+              "draft"
+            ]
+          },
+          "tags": {
+            "description": "Keywords for filtering and discovery: lower case, digits and hyphens. The AI Catalog shows them as the entry's `tags`. `[]` until set.",
+            "examples": [
+              []
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ProductType",
+            "description": "What the Provider sells.",
+            "examples": [
+              "api"
+            ]
+          },
+          "url": {
+            "description": "Where the document was read from, as the Provider sent it.",
+            "examples": [
+              "https://api.portal-labs.example/openapi.json"
+            ],
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "url",
+          "name",
+          "status",
+          "created_at"
+        ],
+        "title": "ProductSummary",
+        "type": "object"
       },
       "ProductType": {
         "description": "What the Provider sells: an API, an MCP server, or an agent.",
@@ -7956,6 +8320,120 @@
       }
     },
     "/plans/{planId}": {
+      "delete": {
+        "operationId": "deletePlan",
+        "parameters": [
+          {
+            "description": "The plan's id.",
+            "in": "path",
+            "name": "planId",
+            "required": true,
+            "schema": {
+              "description": "The plan's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd1b3af0d878"
+              ],
+              "format": "uuid",
+              "title": "planId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The plan and its scopes are gone."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No plan has this id in the caller's tenant."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The plan is not a draft. A published plan is never deleted."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "plans:write"
+            ]
+          }
+        ],
+        "summary": "Delete a draft plan",
+        "tags": [
+          "Plans"
+        ]
+      },
       "get": {
         "operationId": "getPlan",
         "parameters": [
@@ -8063,6 +8541,161 @@
           }
         ],
         "summary": "Read a plan",
+        "tags": [
+          "Plans"
+        ]
+      },
+      "patch": {
+        "operationId": "updatePlan",
+        "parameters": [
+          {
+            "description": "The plan's id.",
+            "in": "path",
+            "name": "planId",
+            "required": true,
+            "schema": {
+              "description": "The plan's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd1b3af0d878"
+              ],
+              "format": "uuid",
+              "title": "planId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/merge-patch+json": {
+              "examples": {
+                "fee": {
+                  "summary": "A Provider raises the fee of a draft",
+                  "value": {
+                    "pricing": {
+                      "fee": 5900
+                    }
+                  }
+                },
+                "scope": {
+                  "summary": "A Provider corrects a scope name",
+                  "value": {
+                    "scopes": [
+                      {
+                        "capability_ids": [
+                          "01a01e21-6f52-71ff-b46c-fd170b90378b"
+                        ],
+                        "scope": "portal:write"
+                      }
+                    ]
+                  }
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/PlanUpdate"
+              }
+            }
+          },
+          "description": "A JSON Merge Patch (RFC 7386). A member left out stays as it is. Only `cost_ceiling` and `pricing.auto_reload` take `null`, which removes them. `pricing` merges part by part. A sent `scopes`, `pricing.credit_packs` or `pricing.auto_reload` replaces the old one whole.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanRead"
+                }
+              }
+            },
+            "description": "The plan, as it is after the change."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No plan has this id in the caller's tenant."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The plan is not a draft. A published plan does not change."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The body is not a valid merge patch of a plan, or the plan it makes is not one keelie will write. `type` says which rule it broke, as for `createPlan`. Nothing changed."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "plans:write"
+            ]
+          }
+        ],
+        "summary": "Change a draft plan",
         "tags": [
           "Plans"
         ]
@@ -8202,6 +8835,124 @@
       }
     },
     "/products": {
+      "get": {
+        "operationId": "listProducts",
+        "parameters": [
+          {
+            "description": "`next_cursor` of the page before. Absent for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`next_cursor` of the page before. Absent for the first page.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "The most products on one page.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "The most products on one page.",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductPage"
+                }
+              }
+            },
+            "description": "A page of the Provider's products, oldest first."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`limit` is out of range, or `cursor` is not a value this collection gave out. `type` says which."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "products:read"
+            ]
+          }
+        ],
+        "summary": "List the products",
+        "tags": [
+          "Products"
+        ]
+      },
       "post": {
         "operationId": "createProduct",
         "parameters": [
@@ -8605,6 +9356,149 @@
       }
     },
     "/products/{productId}/plans": {
+      "get": {
+        "operationId": "listPlans",
+        "parameters": [
+          {
+            "description": "The product the plan sells.",
+            "in": "path",
+            "name": "productId",
+            "required": true,
+            "schema": {
+              "description": "The product the plan sells.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd16fbe55446"
+              ],
+              "format": "uuid",
+              "title": "productId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "`next_cursor` of the page before. Absent for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`next_cursor` of the page before. Absent for the first page.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "The most plans on one page.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "The most plans on one page.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanPage"
+                }
+              }
+            },
+            "description": "A page of the product's plans, drafts included, oldest first."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No product has this id in the caller's tenant."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`limit` is out of range, or `cursor` is not a value this collection gave out. `type` says which."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "plans:read"
+            ]
+          }
+        ],
+        "summary": "List a product's plans",
+        "tags": [
+          "Plans"
+        ]
+      },
       "post": {
         "operationId": "createPlan",
         "parameters": [
