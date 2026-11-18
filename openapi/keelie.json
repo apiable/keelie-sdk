@@ -7798,6 +7798,163 @@
         ]
       }
     },
+    "/orgs:sign-up": {
+      "post": {
+        "description": "Make the Provider of a person who signed up to Sternlie with their agent: the Provider, its realm, and the free plan for the person. No secret is made. A person makes one Provider. Its token then acts for that Provider on every other route.",
+        "operationId": "signUpOrg",
+        "parameters": [
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "portal-labs": {
+                  "summary": "A person's agent makes their Provider",
+                  "value": {
+                    "name": "Portal Labs",
+                    "slug": "portal-labs"
+                  }
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/OrgCreate"
+              }
+            }
+          },
+          "description": "The Provider to create.",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgRead"
+                }
+              }
+            },
+            "description": "The new Provider. It holds no secret.",
+            "headers": {
+              "Location": {
+                "description": "The new Provider's path, `/orgs/{orgId}`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token is not a person's who signed up to Sternlie."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The token names no person keelie knows."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A Provider with this slug exists, or this person has a Provider already. The second names its id."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Too many signups from this address. `Retry-After` says when."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The issuer did not answer, keelie made as many Provider realms this hour as it will make, or keelie already runs as many signups as it will run at once. Nothing was created. `Retry-After` says when."
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "orgs:write"
+            ]
+          }
+        ],
+        "summary": "Sign up a person's Provider",
+        "tags": [
+          "Orgs"
+        ]
+      }
+    },
     "/plans/{planId}": {
       "get": {
         "operationId": "getPlan",
