@@ -857,6 +857,55 @@
         "title": "CredentialCreated",
         "type": "object"
       },
+      "CredentialPage": {
+        "description": "The Provider's own credentials, oldest first. Never a secret.",
+        "properties": {
+          "items": {
+            "description": "The credentials. Empty when there are none, never absent.",
+            "examples": [
+              [
+                {
+                  "client_id": "01a0c35ea80371e6af8c18efc3c768f4",
+                  "created_at": "2026-11-18T09:41:00Z",
+                  "id": "01a01e21-6f52-71ff-b46c-fd247e435c0e",
+                  "revoked_at": "2026-11-18T10:00:00Z",
+                  "status": "revoked",
+                  "subject_id": "01a01e21-6f52-71ff-b46c-fd1e9cc41d93",
+                  "subscription_id": "01a01e21-6f52-71ff-b46c-fd229f3f6b29",
+                  "tokens_expire_by": "2026-11-18T10:30:30Z",
+                  "ttl_seconds": 1800
+                }
+              ]
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CredentialRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The `cursor` of the next page. `null` on the last page.",
+            "examples": [
+              null
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "CredentialPage",
+        "type": "object"
+      },
       "CredentialRead": {
         "description": "One credential, as the Provider may read it. It carries no secret.",
         "properties": {
@@ -6921,6 +6970,579 @@
         "summary": "Connect the Provider's own sign-in for its Consumers",
         "tags": [
           "Orgs"
+        ]
+      }
+    },
+    "/orgs/{orgId}/credentials": {
+      "get": {
+        "operationId": "listOrgCredentials",
+        "parameters": [
+          {
+            "description": "The Provider's id.",
+            "in": "path",
+            "name": "orgId",
+            "required": true,
+            "schema": {
+              "description": "The Provider's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd1433f10a18"
+              ],
+              "format": "uuid",
+              "title": "orgId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "`next_cursor` of the page before. Absent for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`next_cursor` of the page before. Absent for the first page.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "The most credentials on one page.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "The most credentials on one page.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialPage"
+                }
+              }
+            },
+            "description": "A page of the Provider's own credentials, oldest first. No secret."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No Provider has this id in the caller's tenant."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`limit` is not valid, or `cursor` is not a value this gave out."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "credentials:read"
+            ]
+          }
+        ],
+        "summary": "List the Provider's own credentials",
+        "tags": [
+          "Credentials"
+        ]
+      },
+      "post": {
+        "description": "An SDK credential: it reports usage and reads the catalog, and nothing else. To rotate a credential, issue a new one, deploy it, then revoke the old one.",
+        "operationId": "createOrgCredential",
+        "parameters": [
+          {
+            "description": "The Provider's id.",
+            "in": "path",
+            "name": "orgId",
+            "required": true,
+            "schema": {
+              "description": "The Provider's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd1433f10a18"
+              ],
+              "format": "uuid",
+              "title": "orgId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          },
+          {
+            "description": "A client-generated UUID. A repeat with the same key and the same request returns the first response and does nothing again.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "description": "A client-generated UUID. A repeat with the same key and the same request returns the first response and does nothing again.",
+              "format": "uuid",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialCreated"
+                }
+              }
+            },
+            "description": "The credential. The secret is in the first response only; a replay answers `null`.",
+            "headers": {
+              "Location": {
+                "description": "The new credential's path, `/orgs/{orgId}/credentials/{credentialId}`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No Provider has this id in the caller's tenant, or the Provider has no subscription with Apiable."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The Provider holds 5 active credentials already, or the first request with this `Idempotency-Key` is still running."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The `Idempotency-Key` is missing, or the key was used for a different request. `type` says which."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The issuer did not answer. Nothing was created."
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "credentials:write"
+            ]
+          }
+        ],
+        "summary": "Issue a credential of the Provider's own",
+        "tags": [
+          "Credentials"
+        ]
+      }
+    },
+    "/orgs/{orgId}/credentials/{credentialId}": {
+      "get": {
+        "operationId": "getOrgCredential",
+        "parameters": [
+          {
+            "description": "The Provider's id.",
+            "in": "path",
+            "name": "orgId",
+            "required": true,
+            "schema": {
+              "description": "The Provider's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd1433f10a18"
+              ],
+              "format": "uuid",
+              "title": "orgId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The credential's id.",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd247e435c0e"
+              ],
+              "format": "uuid",
+              "title": "credentialId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialRead"
+                }
+              }
+            },
+            "description": "The credential. Never its secret: that was shown once, at issue."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential of the Provider's own has this id."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "credentials:read"
+            ]
+          }
+        ],
+        "summary": "Read a credential of the Provider's own",
+        "tags": [
+          "Credentials"
+        ]
+      }
+    },
+    "/orgs/{orgId}/credentials/{credentialId}:revoke": {
+      "post": {
+        "operationId": "revokeOrgCredential",
+        "parameters": [
+          {
+            "description": "The Provider's id.",
+            "in": "path",
+            "name": "orgId",
+            "required": true,
+            "schema": {
+              "description": "The Provider's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd1433f10a18"
+              ],
+              "format": "uuid",
+              "title": "orgId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The credential's id.",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd247e435c0e"
+              ],
+              "format": "uuid",
+              "title": "credentialId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialRead"
+                }
+              }
+            },
+            "description": "The revoked credential. It mints no new token. A token minted before lives until `tokens_expire_by`."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential of the Provider's own has this id."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential is already revoked, or it is the credential of this request. Revoke that one with another credential."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The issuer did not answer. Nothing was revoked."
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "credentials:write"
+            ]
+          }
+        ],
+        "summary": "Revoke a credential of the Provider's own",
+        "tags": [
+          "Credentials"
         ]
       }
     },
