@@ -15,7 +15,7 @@ group :test do
   gem "rake", "13.4.2"
 
   # Pulled in by actionpack. Pinned here because their newest releases are younger than two weeks.
-  gem "crass", "1.0.7"
+  gem "crass", "1.0.8"
   gem "loofah", "2.25.3"
   gem "nokogiri", "1.19.7"
   gem "rack-test", "2.2.0"
