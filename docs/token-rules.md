@@ -20,6 +20,58 @@ check a token.
 - The discovery documents are at `{issuer}/.well-known/openid-configuration` and at the RFC
   8414 address of the issuer. Both name `jwks_uri`, the key set that signs the tokens.
 
+## A credential with a key pair
+
+A credential can sign in with a key pair instead of a client secret. The Consumer keeps the private
+key. keelie gets the public key only, and nothing secret is shown or stored. This is
+`private_key_jwt` (RFC 7523). The client secret stays the default.
+
+1. Make a key pair: EC P-256, or RSA of 2048 bits or more. Keep the private key in a file that
+   only your server reads.
+2. Issue the credential with the public key set in `jwks`, on `POST /credentials` or
+   `POST /orgs/{orgId}/credentials`. The set holds 1 or 2 keys. Each key has its own `kid`. keelie
+   takes these members only: `kty`, `kid`, `use` (`sig`), `alg`, `n` and `e` for RSA, `crv`, `x`
+   and `y` for EC, and `key_ops` (`["verify"]`). Any other member is refused (`422`), a private
+   one too. Remove `ext`, `x5c` and `x5t` before you send the set.
+3. The answer has `"auth_type": "private_key_jwt"` and `"credential": null`. There is no secret.
+
+To mint, sign a new assertion (a short JWT) for each request:
+
+```json
+{"alg": "ES256", "kid": "k1", "typ": "JWT"}
+{
+  "iss": "<client_id>",
+  "sub": "<client_id>",
+  "aud": "<issuer>",
+  "jti": "<a new UUID>",
+  "iat": 1795000000,
+  "exp": 1795000060
+}
+```
+
+- `iss` and `sub` are the client id. `aud` is the `issuer` of the realm, as its discovery document
+  names it. Read it from the discovery document when your server starts: a switch of your auth
+  domain changes it.
+- `jti` is new for each assertion. The issuer refuses an assertion it has seen.
+- Keep `exp` at most 60 seconds after `iat`. The issuer refuses an older assertion.
+- `kid` names the key that signed it.
+
+Send it to the token endpoint, with no `Authorization` header:
+
+```bash
+curl -s "$TOKEN_ENDPOINT" \
+  -d grant_type=client_credentials \
+  -d client_id="$CLIENT_ID" \
+  -d client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer \
+  -d client_assertion="$ASSERTION"
+```
+
+**Send `client_id` in the form.** Without it the request is refused with `400`, and the assertion
+is spent: sign a new one.
+
+To rotate a key, issue a second credential with the new key, deploy it, then revoke the first.
+No outage: both credentials mint until the revoke.
+
 ## Your own auth domain (Growth and above)
 
 On Growth and above, your realm can run on your own domain, such as `auth.portal-labs.example`.

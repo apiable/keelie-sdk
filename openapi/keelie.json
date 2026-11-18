@@ -119,6 +119,16 @@
         "title": "AuthDomainVerify",
         "type": "object"
       },
+      "AuthType": {
+        "description": "How a client signs in at the token endpoint: an OAuth client authentication method.",
+        "enum": [
+          "private_key_jwt",
+          "none",
+          "client_secret_basic"
+        ],
+        "title": "AuthType",
+        "type": "string"
+      },
       "AutoReload": {
         "additionalProperties": false,
         "description": "What the Consumer's balance does on its own when it runs low.\n\nThe Consumer owns both numbers. The plan carries the default the console offers them.",
@@ -714,6 +724,32 @@
         "additionalProperties": false,
         "description": "What a Provider sends to issue a credential to one of its Consumers.",
         "properties": {
+          "jwks": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JwkSet"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A public key set. With one, the credential signs in with a signed JWT (`private_key_jwt`, RFC 7523) and has no secret: `credential` is `null` in the response. Without one, it gets a client secret. RSA of 2048 bits or more, or EC P-256, and at most 2 keys. A private key member is refused.",
+            "examples": [
+              {
+                "keys": [
+                  {
+                    "alg": "ES256",
+                    "crv": "P-256",
+                    "kid": "2026-11",
+                    "kty": "EC",
+                    "use": "sig",
+                    "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+                    "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"
+                  }
+                ]
+              }
+            ]
+          },
           "subscription_id": {
             "description": "The Consumer's subscription. The credential mints tokens for this subscription only, and lives as long as the plan of the subscription says.",
             "examples": [
@@ -733,6 +769,13 @@
       "CredentialCreated": {
         "description": "The issue response: the credential, and its secret on the first answer only.",
         "properties": {
+          "auth_type": {
+            "$ref": "#/components/schemas/AuthType",
+            "description": "How the credential signs in: `client_secret_basic` with a client secret, or `private_key_jwt` with a signed JWT and no secret.",
+            "examples": [
+              "client_secret_basic"
+            ]
+          },
           "client_id": {
             "description": "The OAuth client id. Public.",
             "examples": [
@@ -759,7 +802,7 @@
                 "type": "null"
               }
             ],
-            "description": "The client id and the secret. The secret is in the first response only. A replay of the same `Idempotency-Key` answers `null` here, with `Idempotency-Replayed: true`: keelie does not keep the secret.",
+            "description": "The client id and the secret. The secret is in the first response only. A replay of the same `Idempotency-Key` answers `null` here, with `Idempotency-Replayed: true`: keelie does not keep the secret. A `private_key_jwt` credential has no secret, so this is `null` on every response.",
             "examples": [
               {
                 "client_id": "01a0c35ea80371e6af8c18efc3c768f4",
@@ -847,6 +890,7 @@
           "client_id",
           "subject_id",
           "subscription_id",
+          "auth_type",
           "status",
           "ttl_seconds",
           "created_at",
@@ -865,6 +909,7 @@
             "examples": [
               [
                 {
+                  "auth_type": "client_secret_basic",
                   "client_id": "01a0c35ea80371e6af8c18efc3c768f4",
                   "created_at": "2026-11-18T09:41:00Z",
                   "id": "01a01e21-6f52-71ff-b46c-fd247e435c0e",
@@ -909,6 +954,13 @@
       "CredentialRead": {
         "description": "One credential, as the Provider may read it. It carries no secret.",
         "properties": {
+          "auth_type": {
+            "$ref": "#/components/schemas/AuthType",
+            "description": "How the credential signs in: `client_secret_basic` with a client secret, or `private_key_jwt` with a signed JWT and no secret.",
+            "examples": [
+              "client_secret_basic"
+            ]
+          },
           "client_id": {
             "description": "The OAuth client id. Public.",
             "examples": [
@@ -1006,6 +1058,7 @@
           "client_id",
           "subject_id",
           "subscription_id",
+          "auth_type",
           "status",
           "ttl_seconds",
           "created_at",
@@ -1381,6 +1434,27 @@
           "client_secret"
         ],
         "title": "IssuedCredential",
+        "type": "object"
+      },
+      "JwkSet": {
+        "additionalProperties": false,
+        "description": "A public key set (RFC 7517 §5): one key, or two during a rotation.",
+        "properties": {
+          "keys": {
+            "description": "The public keys, at most 2. Each `kid` is unique.",
+            "items": {
+              "$ref": "#/components/schemas/PublicJwk"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "title": "Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "title": "JwkSet",
         "type": "object"
       },
       "KeelieExtension": {
@@ -2140,6 +2214,40 @@
           }
         },
         "title": "OrgUpdate",
+        "type": "object"
+      },
+      "OwnCredentialCreate": {
+        "additionalProperties": false,
+        "description": "What a Provider may send to issue a credential of its own: a public key set, and\nnothing else. The power of the credential is fixed.",
+        "properties": {
+          "jwks": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JwkSet"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A public key set. With one, the credential signs in with a signed JWT (`private_key_jwt`, RFC 7523) and has no secret: `credential` is `null` in the response. Without one, it gets a client secret. RSA of 2048 bits or more, or EC P-256, and at most 2 keys. A private key member is refused.",
+            "examples": [
+              {
+                "keys": [
+                  {
+                    "alg": "ES256",
+                    "crv": "P-256",
+                    "kid": "2026-11",
+                    "kty": "EC",
+                    "use": "sig",
+                    "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+                    "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "title": "OwnCredentialCreate",
         "type": "object"
       },
       "PlanCreate": {
@@ -3495,6 +3603,160 @@
           }
         },
         "title": "ProductUpdate",
+        "type": "object"
+      },
+      "PublicJwk": {
+        "additionalProperties": false,
+        "description": "One public key, as RFC 7517 writes it. Only the public members are taken. Any other\nmember is refused, and a refusal never shows the key.",
+        "properties": {
+          "alg": {
+            "anyOf": [
+              {
+                "enum": [
+                  "RS256",
+                  "RS384",
+                  "RS512",
+                  "PS256",
+                  "PS384",
+                  "PS512",
+                  "ES256"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The algorithm the key signs with. `ES256` for an EC key.",
+            "title": "Alg"
+          },
+          "crv": {
+            "anyOf": [
+              {
+                "const": "P-256",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "EC: `P-256`.",
+            "title": "Crv"
+          },
+          "e": {
+            "anyOf": [
+              {
+                "maxLength": 8,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "RSA: the exponent.",
+            "title": "E"
+          },
+          "key_ops": {
+            "anyOf": [
+              {
+                "items": {
+                  "const": "verify",
+                  "type": "string"
+                },
+                "maxItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`[\"verify\"]`, when present.",
+            "title": "Key Ops"
+          },
+          "kid": {
+            "description": "The key's id. The signed JWT names it in its header. Unique in the set.",
+            "examples": [
+              "2026-11"
+            ],
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Kid",
+            "type": "string"
+          },
+          "kty": {
+            "description": "`RSA`, or `EC`.",
+            "enum": [
+              "RSA",
+              "EC"
+            ],
+            "examples": [
+              "EC"
+            ],
+            "title": "Kty",
+            "type": "string"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "maxLength": 1400,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "RSA: the modulus.",
+            "title": "N"
+          },
+          "use": {
+            "anyOf": [
+              {
+                "const": "sig",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`sig`, when present.",
+            "title": "Use"
+          },
+          "x": {
+            "anyOf": [
+              {
+                "maxLength": 43,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "EC: the x coordinate.",
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "maxLength": 43,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "EC: the y coordinate.",
+            "title": "Y"
+          }
+        },
+        "required": [
+          "kty",
+          "kid"
+        ],
+        "title": "PublicJwk",
         "type": "object"
       },
       "ScopeRead": {
@@ -5813,7 +6075,7 @@
               }
             }
           },
-          "description": "The subscription to issue a credential on.",
+          "description": "The subscription to issue a credential on, and an optional public key set.",
           "required": true
         },
         "responses": {
@@ -5825,7 +6087,7 @@
                 }
               }
             },
-            "description": "The credential. The secret is in the first response only; a replay answers `null`.",
+            "description": "The credential. The secret is in the first response only; a replay answers `null`. A `private_key_jwt` credential has no secret.",
             "headers": {
               "Location": {
                 "description": "The new credential's path, `/credentials/{credentialId}`.",
@@ -7118,7 +7380,7 @@
         ]
       },
       "post": {
-        "description": "An SDK credential: it reports usage and reads the catalog, and nothing else. To rotate a credential, issue a new one, deploy it, then revoke the old one.",
+        "description": "An SDK credential: it reports usage and reads the catalog, and nothing else. To rotate a credential, issue a new one, deploy it, then revoke the old one. With no body, or with no `jwks`, the credential gets a client secret. With a public key set in `jwks`, it signs in with a signed JWT and has no secret.",
         "operationId": "createOrgCredential",
         "parameters": [
           {
@@ -7167,6 +7429,48 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "key_pair": {
+                  "summary": "A key pair",
+                  "value": {
+                    "jwks": {
+                      "keys": [
+                        {
+                          "alg": "ES256",
+                          "crv": "P-256",
+                          "kid": "2026-11",
+                          "kty": "EC",
+                          "use": "sig",
+                          "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+                          "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "secret": {
+                  "summary": "A client secret",
+                  "value": {}
+                }
+              },
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OwnCredentialCreate"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          },
+          "description": "Optional. A public key set, and nothing else."
+        },
         "responses": {
           "201": {
             "content": {
@@ -7176,7 +7480,7 @@
                 }
               }
             },
-            "description": "The credential. The secret is in the first response only; a replay answers `null`.",
+            "description": "The credential. The secret is in the first response only; a replay answers `null`. A `private_key_jwt` credential has no secret.",
             "headers": {
               "Location": {
                 "description": "The new credential's path, `/orgs/{orgId}/credentials/{credentialId}`.",
@@ -7234,7 +7538,7 @@
                 }
               }
             },
-            "description": "The `Idempotency-Key` is missing, or the key was used for a different request. `type` says which."
+            "description": "The `Idempotency-Key` is missing, the key was used for a different request, or `jwks` is not a public key set keelie takes. `type` says which."
           },
           "500": {
             "content": {
