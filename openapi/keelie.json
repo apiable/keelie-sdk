@@ -1,6 +1,103 @@
 {
   "components": {
     "schemas": {
+      "AgentList": {
+        "description": "One page of the Keelie Registry. `items` is `[]` when nothing is published.",
+        "properties": {
+          "items": {
+            "description": "One entry for each API product with at least one published plan, in a fixed order. Each entry is the entry of the Provider's own catalog.",
+            "examples": [
+              [
+                {
+                  "displayName": "Portal Labs API",
+                  "extensions": {
+                    "io.apiable.keelie": {
+                      "plans": [
+                        {
+                          "name": "Starter",
+                          "scopes": [
+                            "portal:read"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "identifier": "urn:air:api.portal-labs.example:api:01a01e21-6f52-71ff-b46c-fd16fbe55446",
+                  "publisher": {
+                    "displayName": "Portal Labs",
+                    "identifier": "api.portal-labs.example",
+                    "identityType": "dns"
+                  },
+                  "type": "application/openapi+json",
+                  "updatedAt": "2026-10-15T09:41:00Z",
+                  "url": "https://api.portal-labs.example/openapi.json"
+                }
+              ]
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CatalogEntry"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "pageToken": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Send it as `pageToken` to read the next page. Absent on the last page. Opaque.",
+            "examples": [
+              "AZrM2kQ0cbOR_5B3GhVwqA"
+            ],
+            "title": "Pagetoken"
+          },
+          "total": {
+            "description": "How many products the registry lists, on every page together.",
+            "examples": [
+              1
+            ],
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "AgentList",
+        "type": "object"
+      },
+      "ArdError": {
+        "description": "An error on a registry route, in ARD's shape.",
+        "properties": {
+          "errorCode": {
+            "description": "An uppercase class of the error.",
+            "examples": [
+              "INVALID_ARGUMENT"
+            ],
+            "title": "Errorcode",
+            "type": "string"
+          },
+          "message": {
+            "description": "What went wrong, for a person. It changes without notice.",
+            "examples": [
+              "This registry does not support `filter`."
+            ],
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "errorCode",
+          "message"
+        ],
+        "title": "ArdError",
+        "type": "object"
+      },
       "AuthDomainVerify": {
         "additionalProperties": false,
         "description": "The auth domain to prove.",
@@ -4995,6 +5092,175 @@
   },
   "openapi": "3.2.0",
   "paths": {
+    "/agents": {
+      "get": {
+        "operationId": "listAgents",
+        "parameters": [
+          {
+            "description": "How many entries a page holds at most.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "How many entries a page holds at most.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Pagesize",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The `pageToken` of the page before. Absent for the first page.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The `pageToken` of the page before. Absent for the first page.",
+              "title": "Pagetoken"
+            }
+          },
+          {
+            "description": "Not supported. A request that sends it is refused with `400`.",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Not supported. A request that sends it is refused with `400`.",
+              "title": "Filter"
+            }
+          },
+          {
+            "description": "Not supported. A request that sends it is refused with `400`.",
+            "in": "query",
+            "name": "orderBy",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Not supported. A request that sends it is refused with `400`.",
+              "title": "Orderby"
+            }
+          },
+          {
+            "description": "An `ETag` of a page read before. A match is answered with `304`.",
+            "in": "header",
+            "name": "if-none-match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An `ETag` of a page read before. A match is answered with `304`.",
+              "title": "If-None-Match"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentList"
+                }
+              }
+            },
+            "description": "One page of the registry. Each item is the entry that the Provider's own catalog shows for the product. The page carries `ETag` and may be cached for five minutes."
+          },
+          "304": {
+            "description": "`If-None-Match` named the current `ETag`. No body."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArdError"
+                }
+              }
+            },
+            "description": "`pageSize` is out of range, `pageToken` is not a token this registry wrote, or the request names `filter` or `orderBy`, which this registry does not support."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArdError"
+                }
+              }
+            },
+            "description": "Too many reads from this address. `Retry-After` says when to try again.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArdError"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "List every published API product",
+        "tags": [
+          "Registry"
+        ]
+      }
+    },
     "/ai-catalog": {
       "get": {
         "operationId": "getAiCatalog",
@@ -11648,6 +11914,10 @@
     {
       "description": "The Provider's AI Catalog (ai-catalog.io): what an agent reads to choose an API. keelie builds it on each read from the published plans, so it never disagrees with them. The SDK serves it on the Provider's own domain, at `/.well-known/ard.json` and `/.well-known/ai-catalog.json`.",
       "name": "Catalog"
+    },
+    {
+      "description": "The Keelie Registry: one public list of every API product that a Provider has published, so that an agent finds a Provider whose domain it does not know. Each entry is the entry of the Provider's own catalog. It speaks the Agentic Resource Discovery (ARD) registry API, in ARD's own names and error shape.",
+      "name": "Registry"
     },
     {
       "description": "What the Provider's SDK reports about each call. It feeds the Provider's dashboards and the Consumer's balance. Apiable never bills on it.",
