@@ -3808,6 +3808,297 @@
         "title": "ScopeRead",
         "type": "object"
       },
+      "SearchQuery": {
+        "additionalProperties": false,
+        "description": "What to find (ARD section 5.3.1): the agent's words, and what each result must be.",
+        "properties": {
+          "@context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Accepted and not read. It binds prefixes for namespaced `filter` keys, and this registry filters on none.",
+            "examples": [
+              "https://ard.example/context.jsonld"
+            ],
+            "title": "@Context"
+          },
+          "filter": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 20,
+                      "type": "array"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What each result must be. The keys are `type`, `tags` and `publisher`. Values in one key are OR, keys together are AND, and a bare string is a list of one. Another key is refused with `400`.",
+            "examples": [
+              {
+                "tags": [
+                  "weather"
+                ]
+              }
+            ],
+            "title": "Filter"
+          },
+          "text": {
+            "description": "What the agent needs, in its own words. A product matches if it holds any word of the text. A product that holds more of them ranks higher.",
+            "examples": [
+              "find me a weather lookup tool"
+            ],
+            "maxLength": 500,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "SearchQuery",
+        "type": "object"
+      },
+      "SearchRequest": {
+        "additionalProperties": false,
+        "description": "A search of the Keelie Registry (ARD section 5.3.2, `SearchRequest`).",
+        "properties": {
+          "federation": {
+            "default": "auto",
+            "description": "Which registries to ask. This registry has no upstream registry yet, so each value searches the Keelie Registry only.",
+            "enum": [
+              "auto",
+              "referrals",
+              "none"
+            ],
+            "examples": [
+              "none"
+            ],
+            "title": "Federation",
+            "type": "string"
+          },
+          "pageSize": {
+            "default": 10,
+            "description": "How many results a page holds at most.",
+            "examples": [
+              10
+            ],
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Pagesize",
+            "type": "integer"
+          },
+          "pageToken": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The `pageToken` of the page before, with the same `query`.",
+            "examples": [
+              "NwGa0aZRZXRhWB_lsqkBLA2CO_bbqzmUiA"
+            ],
+            "title": "Pagetoken"
+          },
+          "query": {
+            "$ref": "#/components/schemas/SearchQuery",
+            "description": "What to find.",
+            "examples": [
+              {
+                "filter": {
+                  "tags": [
+                    "weather"
+                  ]
+                },
+                "text": "find me a weather lookup tool"
+              }
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SearchRequest",
+        "type": "object"
+      },
+      "SearchResponse": {
+        "description": "One page of results, best first. `results` is `[]` when nothing matches.",
+        "properties": {
+          "pageToken": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Send it as `pageToken`, with the same `query`, to read the next page. Absent on the last page. Opaque.",
+            "examples": [
+              "NwGa0aZRZXRhWB_lsqkBLA2CO_bbqzmUiA"
+            ],
+            "title": "Pagetoken"
+          },
+          "results": {
+            "description": "The results, by score, highest first.",
+            "examples": [
+              [
+                {
+                  "displayName": "Portal Labs API",
+                  "identifier": "urn:air:api.portal-labs.example:api:01a01e21-6f52-71ff-b46c-fd16fbe55446",
+                  "score": 55,
+                  "source": "https://api.keelie.io/",
+                  "tags": [
+                    "portals"
+                  ],
+                  "type": "application/openapi+json",
+                  "url": "https://api.portal-labs.example/openapi.json"
+                }
+              ]
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "SearchResponse",
+        "type": "object"
+      },
+      "SearchResult": {
+        "description": "One product a search found (ARD `SearchResultItem`). The fields it shares with the entry\nhave the entry's values.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the product does, as the Provider says it. Absent if not set.",
+            "title": "Description"
+          },
+          "displayName": {
+            "description": "The product's name.",
+            "examples": [
+              "Portal Labs API"
+            ],
+            "title": "Displayname",
+            "type": "string"
+          },
+          "identifier": {
+            "description": "The entry's identifier, as in the Provider's own catalog.",
+            "examples": [
+              "urn:air:api.portal-labs.example:api:01a01e21-6f52-71ff-b46c-fd16fbe55446"
+            ],
+            "title": "Identifier",
+            "type": "string"
+          },
+          "score": {
+            "description": "How well the product matches the text, from 0 to 100. Relevance only: never a rating of trust, safety or quality.",
+            "examples": [
+              55
+            ],
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "type": "integer"
+          },
+          "source": {
+            "description": "The registry that found the product: the Keelie Registry's base URL.",
+            "examples": [
+              "https://api.keelie.io/"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Provider's tags. Absent if none.",
+            "examples": [
+              [
+                "portals"
+              ]
+            ],
+            "title": "Tags"
+          },
+          "type": {
+            "description": "The media type of `url`.",
+            "examples": [
+              "application/openapi+json"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "description": "Where the Provider serves the product's document.",
+            "examples": [
+              "https://api.portal-labs.example/openapi.json"
+            ],
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "identifier",
+          "displayName",
+          "type",
+          "url",
+          "score",
+          "source"
+        ],
+        "title": "SearchResult",
+        "type": "object"
+      },
       "StoredPricing": {
         "description": "The same document, read back off a row.\n\nTolerant where `PlanPricing` is strict. A stored document is data keelie already\naccepted, so reading it must not fail: a member added to the shape in a later release\nwould otherwise make every read of an older row a 500, and a 500 means keelie is broken.",
         "properties": {
@@ -10754,6 +11045,109 @@
         ]
       }
     },
+    "/search": {
+      "post": {
+        "description": "A read, sent as `POST` because the query is a JSON body. It changes nothing, needs no `Idempotency-Key`, and is not cacheable. A product matches if it holds any word of `query.text`, in its name, representative queries, tags or description. A search that finds nothing is a `200` with `results: []`.",
+        "operationId": "searchAgents",
+        "parameters": [
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "federation": "none",
+                "pageSize": 10,
+                "query": {
+                  "filter": {
+                    "tags": [
+                      "weather"
+                    ]
+                  },
+                  "text": "find me a weather lookup tool"
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "description": "The search: the agent's words in `query.text`, an optional `filter`, and the page to read.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "One page of results, best first."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArdError"
+                }
+              }
+            },
+            "description": "The body is not a search this registry can answer: no `query.text`, a member ARD does not define, a `filter` key other than `type`, `tags` or `publisher`, `pageSize` out of range, or a `pageToken` this registry did not write for the same `query`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArdError"
+                }
+              }
+            },
+            "description": "Too many searches from this address. `Retry-After` says when to try again.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArdError"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Search every published API product (a read)",
+        "tags": [
+          "Registry"
+        ]
+      }
+    },
     "/status/health": {
       "get": {
         "operationId": "getHealth",
@@ -13893,7 +14287,7 @@
       "name": "Catalog"
     },
     {
-      "description": "The Keelie Registry: one public list of every API product that a Provider has published, so that an agent finds a Provider whose domain it does not know. Each entry is the entry of the Provider's own catalog. It speaks the Agentic Resource Discovery (ARD) registry API, in ARD's own names and error shape.",
+      "description": "The Keelie Registry: one public list and one search of every API product that a Provider has published, so that an agent finds a Provider whose domain it does not know. Each entry is the entry of the Provider's own catalog. It speaks the Agentic Resource Discovery (ARD) registry API, in ARD's own names and error shape.",
       "name": "Registry"
     },
     {
