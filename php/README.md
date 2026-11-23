@@ -1,4 +1,4 @@
-# apiable/keelie
+# apiable/keelie-sdk
 
 **In development. The Keelie SDK for PHP, by Apiable, is not released yet.** The package is not on
 Packagist.

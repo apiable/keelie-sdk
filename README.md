@@ -57,7 +57,7 @@ with each keelie release.
 | [`go/`](go/) | The Go module `github.com/apiable/keelie-sdk/go`. Not tagged yet. |
 | [`ruby/`](ruby/) | The Ruby gem `keelie`. Not on RubyGems yet. |
 | [`dotnet/`](dotnet/) | The .NET packages `Keelie` and `Keelie.AspNetCore`. Not released; nothing is on NuGet yet. |
-| [`php/`](php/) | The PHP package `apiable/keelie`, with PSR-15 middleware. Not released; nothing is on Packagist yet. |
+| [`php/`](php/) | The PHP package `apiable/keelie-sdk`, with PSR-15 middleware. Not released; nothing is on Packagist yet. |
 | [`docs/`](docs/) | The documentation. |
 
 ## Security

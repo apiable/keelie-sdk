@@ -1,5 +1,5 @@
 {
-    "name": "apiable/keelie",
+    "name": "apiable/keelie-sdk",
     "description": "The Keelie SDK, by Apiable. In development, not released.",
     "type": "library",
     "license": "Apache-2.0",

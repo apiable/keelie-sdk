@@ -6,7 +6,7 @@ Laravel and Symfony can call it from their own middleware. It does what the Pyth
 the same rules: it checks each token inside your own process, checks the scope of each route or
 tool, and reports usage in batches, after the response. Your requests never pass through Apiable.
 
-> **Status: in development, not released.** The package `apiable/keelie` is not on Packagist yet.
+> **Status: in development, not released.** The package `apiable/keelie-sdk` is not on Packagist yet.
 > Until it is released, install it from this repository (see [Install](#install)).
 >
 > Packagist reads `composer.json` only from the root of a repository. This package is in `php/`,
@@ -36,7 +36,7 @@ composer config repositories.keelie path /path/to/keelie-sdk/php
 ```
 
 ```bash
-composer require apiable/keelie:@dev
+composer require apiable/keelie-sdk:@dev
 ```
 
 ## Get started with Slim
