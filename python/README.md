@@ -1,9 +1,9 @@
-# apiable
+# keelie-sdk
 
 **Placeholder. The Keelie SDK, by Apiable, is not released yet.**
 
-This package reserves the name while the SDK is in development. The code in this repository is
-not released, and it has no stable API yet.
+This package reserves the name while the SDK is in development. You import it as `apiable`.
+The code in this repository is not released, and it has no stable API yet.
 
 ## What it will be
 

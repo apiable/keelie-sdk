@@ -1,7 +1,8 @@
 name: publish
 
-# Publishes the Python package `apiable` to PyPI through trusted publishing (OIDC). No PyPI token is
-# stored anywhere. PyPI trusts this file by name, in the environment `pypi`, so do not rename either.
+# Publishes the Python package `keelie-sdk` to PyPI through trusted publishing (OIDC). No PyPI
+# token is stored anywhere. PyPI trusts this file by name, in the environment `pypi`, so do not
+# rename either.
 #
 # Release: set `version` in python/pyproject.toml, merge, then push the tag `python/v<version>`.
 # The tag names the package, because each package in this repository has its own version. The Go
@@ -51,7 +52,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: pypi
-      url: https://pypi.org/project/apiable/
+      url: https://pypi.org/project/keelie-sdk/
     permissions:
       id-token: write
     steps:

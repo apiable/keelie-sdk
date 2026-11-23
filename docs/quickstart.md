@@ -71,11 +71,11 @@ keelie issues no Consumer credential before you set this address.
 ## 3. Install the SDK
 
 ```bash
-pip install apiable
+pip install keelie-sdk
 ```
 
 > **Note:** the SDK is not released yet. Until it is, install it from this repository:
-> `pip install "apiable @ git+https://github.com/apiable/keelie-sdk#subdirectory=python"`.
+> `pip install "keelie-sdk @ git+https://github.com/apiable/keelie-sdk#subdirectory=python"`.
 
 ## 4. Configure the SDK
 

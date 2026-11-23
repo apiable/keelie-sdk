@@ -6,7 +6,7 @@ its arguments, its return value and its errors. To start, read the [quickstart](
 | Resource | Location |
 |---|---|
 | Source | [`python/`](../python/) in this repository |
-| Package | [`apiable` on PyPI](https://pypi.org/project/apiable/). Not released yet. |
+| Package | [`keelie-sdk` on PyPI](https://pypi.org/project/keelie-sdk/). Not released yet. You import it as `apiable`. |
 | Python | 3.9 or later |
 | Dependencies | `httpx`, `pyjwt[crypto]` |
 | Frameworks | Any ASGI framework: FastAPI, Starlette and others |
@@ -14,7 +14,7 @@ its arguments, its return value and its errors. To start, read the [quickstart](
 
 ## Get started
 
-1. Install the SDK: `pip install apiable`.
+1. Install the SDK: `pip install keelie-sdk`.
 2. Make one `TokenVerifier`, one `ProtectedResourceMetadata` and one `UsageReporter` for the
    process. Make them at import time or in the lifespan of your app, never for each request.
 3. Mount `TokenGuard` (a REST API) or `McpGuard` (an MCP server) as middleware.
