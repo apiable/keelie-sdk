@@ -1685,7 +1685,7 @@
             "type": "string"
           },
           "slug": {
-            "description": "The Provider's host is `{slug}.keelie.io`. That host is in the `iss` of every token of the Provider's Consumers, so the slug can never change. Lowercase letters, digits and inner hyphens, 63 at most. Some names are reserved for Keelie's own hosts.",
+            "description": "The Provider's host is `{slug}.keelie.io`. That host is in the `iss` of every token of the Provider's Consumers, so the slug can never change. Lowercase letters, digits and inner hyphens, 63 at most. Some names are reserved for Keelie's own hosts. A slug that ends in `-test` is a test lane's, so signup refuses it.",
             "examples": [
               "portal-labs"
             ],
@@ -1782,6 +1782,22 @@
             ],
             "title": "Issuer",
             "type": "string"
+          },
+          "live_org_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on a test org: the id of the live org whose test lane it is. Null on a live org. A test org charges through Stripe's test mode, so its Consumers pay with test cards and no money moves. Its tokens have their own `iss` and `org_id`, so an SDK set up for the live org refuses them. It mints for 10 new Consumer credentials a month.",
+            "examples": [
+              null
+            ],
+            "title": "Live Org Id"
           },
           "logo_url": {
             "anyOf": [
@@ -1912,6 +1928,7 @@
           "stripe_account",
           "metered",
           "allowance_remaining",
+          "live_org_id",
           "credential",
           "sdk_credential"
         ],
@@ -1987,6 +2004,22 @@
             ],
             "title": "Issuer",
             "type": "string"
+          },
+          "live_org_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on a test org: the id of the live org whose test lane it is. Null on a live org. A test org charges through Stripe's test mode, so its Consumers pay with test cards and no money moves. Its tokens have their own `iss` and `org_id`, so an SDK set up for the live org refuses them. It mints for 10 new Consumer credentials a month.",
+            "examples": [
+              null
+            ],
+            "title": "Live Org Id"
           },
           "logo_url": {
             "anyOf": [
@@ -2106,7 +2139,8 @@
           "secondary_color",
           "stripe_account",
           "metered",
-          "allowance_remaining"
+          "allowance_remaining",
+          "live_org_id"
         ],
         "title": "OrgRead",
         "type": "object"
@@ -9244,6 +9278,148 @@
           }
         ],
         "summary": "Move the Provider's realm back to its own host",
+        "tags": [
+          "Orgs"
+        ]
+      }
+    },
+    "/orgs/{orgId}:open-test-lane": {
+      "post": {
+        "description": "Make the Provider's test org, `{slug}-test`. It is an org of its own, with its own realm, credentials, plans and Consumers, and it charges through Stripe's test mode: its Consumers pay with test cards, and no money moves. Its tokens carry their own `iss` and `org_id`, so an SDK set up for the live org refuses them, and the other way round. It mints for 10 new Consumer credentials a month. Connect its own Stripe account with its admin credential. To go live, make the same products and plans in the live org.",
+        "operationId": "openOrgTestLane",
+        "parameters": [
+          {
+            "description": "The Provider's id.",
+            "in": "path",
+            "name": "orgId",
+            "required": true,
+            "schema": {
+              "description": "The Provider's id.",
+              "examples": [
+                "01a01e21-6f52-71ff-b46c-fd1433f10a18"
+              ],
+              "format": "uuid",
+              "title": "orgId",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+            "examples": {
+              "default": {
+                "value": "2026-10-08"
+              }
+            },
+            "in": "header",
+            "name": "X-API-Version",
+            "required": false,
+            "schema": {
+              "default": "2026-10-08",
+              "description": "Pins the API version, as a release date. Pin the newest release, and no breaking change reaches you until you choose a newer date. Without it you get the baseline (2026-10-08). A date between two releases gets the earlier one; a date before the baseline is not served.",
+              "format": "date",
+              "title": "X-Api-Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgCreated"
+                }
+              }
+            },
+            "description": "The test org, its admin credential and its SDK credential. The secrets are in this response only.",
+            "headers": {
+              "Location": {
+                "description": "The test org's path, `/orgs/{orgId}`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No credential, or a credential that does not verify. `WWW-Authenticate` says which (RFC 6750 §3)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The credential verifies and lacks the scope this operation needs."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No Provider has this id in the caller's tenant."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The test lane is open already, and the answer names its org. Or this Provider is a test org or Apiable's own, or another Provider has the slug `{slug}-test`."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The issuer did not answer, keelie made as many Provider realms this hour as it will make, or keelie already runs as many signups as it will run at once. Nothing was created. `Retry-After` says when."
+          }
+        },
+        "security": [
+          {
+            "oauth2": [
+              "orgs:write"
+            ]
+          }
+        ],
+        "summary": "Open the Provider's test lane",
         "tags": [
           "Orgs"
         ]
