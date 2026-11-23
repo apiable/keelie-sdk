@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "apiable"
+name = "keelie-sdk"
 version = "0.0.3"
 description = "Placeholder for the Keelie SDK, by Apiable. Token checks, scopes and usage reports for your API, off the request path."
 readme = "README.md"

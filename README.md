@@ -50,7 +50,7 @@ with each keelie release.
 
 | Folder | What it holds |
 |---|---|
-| [`python/`](python/) | The Python package `apiable`. On PyPI today it is a placeholder that reserves the name. |
+| [`python/`](python/) | The Python package `keelie-sdk`, imported as `apiable`. On PyPI today it is a placeholder that reserves the name. |
 | [`node/`](node/) | The Node package `keelie`, with adapters for Express. Not released; the name is held on npm. |
 | [`go/`](go/) | The Go module `github.com/apiable/keelie-sdk/go`. Not tagged yet. |
 | [`ruby/`](ruby/) | The Ruby gem `keelie`. Not on RubyGems yet. |
