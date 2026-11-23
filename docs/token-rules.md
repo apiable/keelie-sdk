@@ -104,26 +104,36 @@ What a switch does, in both directions:
 - If your Consumers sign in through your own identity provider, register the new redirect URI
   there before you switch. It is on your domain.
 
-## Your server address: the audience
+## The product's address: the audience
 
-- Set the address of your server with `PATCH /orgs/{orgId}` and the member `resource`. keelie
-  issues no Consumer credential before you set it (`409`).
+Each product has its own server address. One Provider can sell an API and an MCP server, each
+on its own address.
+
+- Set the address of a product's server with `resource`, on `POST /products` or on
+  `PATCH /products/{productId}`. keelie publishes no plan of the product, and issues no Consumer
+  credential on it, before you set it (`409`).
 - The address uses `https` and has a host. It has no user, no query and no fragment. It has no
   final slash after a path. Write the scheme and the host in lowercase.
-- Every Consumer token carries this address in `aud`, exactly as you set it.
+- A credential belongs to one subscription, and so to one product. Each token of the credential
+  carries the address of that product in `aud`, exactly as you set it, and no other address.
+- So a Consumer with two subscriptions has two credentials, and gets one token for each product.
+  The server of the other product refuses the token, because its address is not in `aud`.
 - When you change the address, the next token carries the new one. A token that is already
   minted keeps the old address until it expires.
+- Give each server the address of its own product as the audience in its SDK settings.
 
 ### The `resource` parameter (RFC 8707)
 
 A Consumer can send one `resource` parameter with the mint. A client that reads your RFC 9728
-metadata sends the `resource` that it names, exactly. That is your server address.
+metadata sends the `resource` that it names, exactly. That is the address of your product's
+server.
 
-- No `resource`: the token is minted. It carries your address in `aud` all the same.
-- One `resource` that names your address: the token is minted. keelie compares the scheme and
-  the host in lowercase, and the rest exactly.
-- Another address, an empty value, or more than one `resource`: no token. The answer is `400`
-  with `{"error": "invalid_target"}`. The description does not tell your address.
+- No `resource`: the token is minted. It carries the product's address in `aud` all the same.
+- One `resource` that names the address of the credential's product: the token is minted. keelie
+  compares the scheme and the host in lowercase, and the rest exactly.
+- The address of another product, another address, an empty value, or more than one `resource`:
+  no token. The answer is `400` with `{"error": "invalid_target"}`. The description does not
+  tell your address.
 - A request that is not a readable form: no token. The answer is `400` with
   `{"error": "invalid_request"}`. Send exactly one `Content-Type` header, with the value
   `application/x-www-form-urlencoded`. A `charset` parameter is allowed.
@@ -141,7 +151,7 @@ metadata sends the `resource` that it names, exactly. That is your server addres
 | Claim | Value | Your check |
 |---|---|---|
 | `iss` | The `issuer` of your realm, from `GET /orgs/{orgId}`. | Must be equal. The `issuer` of the discovery document must be equal too. |
-| `aud` | Your server address, the `resource` of your org. | Must contain your address. |
+| `aud` | The address of the product's server, the `resource` of the product. On a token for a person, the address of every product you sell. | Must contain the address of this server's product. |
 | `typ` | `Bearer` | Must be equal. |
 | `exp` | Seconds since the epoch. | Required. Allow 30 seconds of clock difference. |
 | `iat` | Seconds since the epoch. | Check it with the same 30 seconds. |
@@ -182,6 +192,10 @@ token. Each refresh token works once.
   stores no name and no email for the person.
 - `consumer_id` is the Consumer whose plan and credits the person uses. Use it where you use
   `azp` for a credential's token.
+- The audience `aud` holds the address of every product you sell, not only one. The issuer cannot write one
+  product's address for each person. So each of your servers accepts the address in such a
+  token. Only `scope` tells which product the token may use. Each of your servers must allow a
+  call only when the token has the scope that the call needs.
 - The other claims follow the rules above.
 
 The person's Consumer is set before the person signs in. When you connect your own sign-in

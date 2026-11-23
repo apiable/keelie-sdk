@@ -1844,21 +1844,6 @@
             ],
             "title": "Primary Color"
           },
-          "resource": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The address of the Provider's server (RFC 8707). Every token of the Provider's Consumers carries it in `aud`, and the token endpoint accepts it, and no other value, as `resource`. Null until the Provider sets it with `PATCH /orgs/{orgId}`. No Consumer credential is issued while it is null.",
-            "examples": [
-              "https://mcp.portal-labs.example/mcp"
-            ],
-            "title": "Resource"
-          },
           "sdk_credential": {
             "$ref": "#/components/schemas/IssuedCredential",
             "description": "The credential for the SDK. It carries `usage:write` and `products:read` only: it reports usage and reads the AI Catalog. Give the SDK this one, never the admin credential. The secret is in this response only.",
@@ -1924,7 +1909,6 @@
           "logo_url",
           "primary_color",
           "secondary_color",
-          "resource",
           "stripe_account",
           "metered",
           "allowance_remaining",
@@ -2065,21 +2049,6 @@
             ],
             "title": "Primary Color"
           },
-          "resource": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The address of the Provider's server (RFC 8707). Every token of the Provider's Consumers carries it in `aud`, and the token endpoint accepts it, and no other value, as `resource`. Null until the Provider sets it with `PATCH /orgs/{orgId}`. No Consumer credential is issued while it is null.",
-            "examples": [
-              "https://mcp.portal-labs.example/mcp"
-            ],
-            "title": "Resource"
-          },
           "secondary_color": {
             "anyOf": [
               {
@@ -2135,7 +2104,6 @@
           "logo_url",
           "primary_color",
           "secondary_color",
-          "resource",
           "stripe_account",
           "metered",
           "allowance_remaining"
@@ -2178,23 +2146,6 @@
               "#0b5fff"
             ],
             "title": "Primary Color"
-          },
-          "resource": {
-            "anyOf": [
-              {
-                "maxLength": 2048,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The address of the Provider's server, exactly as its RFC 9728 metadata names it: the MCP endpoint itself, or the base URL of the API. `https`, with a host, and no user, query, fragment or final slash after a path. The scheme and the host are lowercase. It cannot be set back to null. A change reaches the next token: a token already minted keeps the old address until it expires, at most 30 minutes.",
-            "examples": [
-              "https://mcp.portal-labs.example/mcp"
-            ],
-            "title": "Resource"
           },
           "secondary_color": {
             "anyOf": [
@@ -3086,6 +3037,23 @@
         "additionalProperties": false,
         "description": "What a Provider sends to register a product: a type, and where it is.",
         "properties": {
+          "resource": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The address of the product's server, exactly as its RFC 9728 metadata names it: the MCP endpoint itself, or the base URL of the API. `https`, with a host, and no user, query, fragment or final slash after a path. The scheme and the host are lowercase. Optional here: set it later with a `PATCH`.",
+            "examples": [
+              "https://api.portal-labs.example"
+            ],
+            "title": "Resource"
+          },
           "type": {
             "description": "What the Provider sells. `api` reads a document in JSON or YAML: keelie reads Swagger 2.0 and OpenAPI 3.0, 3.1 and 3.2. `mcp` asks an MCP server for its tools, over Streamable HTTP, without authorization. `agent` is not accepted yet.",
             "enum": [
@@ -3238,6 +3206,21 @@
             "title": "Representative Queries",
             "type": "array"
           },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The address of the product's server (RFC 8707). Each token of a credential on this product carries it in `aud`, and the token endpoint accepts it as `resource`. A token for a person carries the address of every product of the Provider. Null until the Provider sets it. No plan of the product is published, and no credential is issued on it, while it is null.",
+            "examples": [
+              "https://api.portal-labs.example"
+            ],
+            "title": "Resource"
+          },
           "status": {
             "$ref": "#/components/schemas/ProductStatus",
             "description": "A product is a `draft` until the first of its plans is published. Then it is `published`, and it stays `published` unless it is archived.",
@@ -3378,6 +3361,21 @@
             "title": "Representative Queries",
             "type": "array"
           },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The address of the product's server (RFC 8707). Each token of a credential on this product carries it in `aud`, and the token endpoint accepts it as `resource`. A token for a person carries the address of every product of the Provider. Null until the Provider sets it. No plan of the product is published, and no credential is issued on it, while it is null.",
+            "examples": [
+              "https://api.portal-labs.example"
+            ],
+            "title": "Resource"
+          },
           "status": {
             "$ref": "#/components/schemas/ProductStatus",
             "description": "A product is a `draft` until the first of its plans is published. Then it is `published`, and it stays `published` unless it is archived.",
@@ -3479,6 +3477,21 @@
             "title": "Name",
             "type": "string"
           },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The address of the product's server (RFC 8707). Each token of a credential on this product carries it in `aud`, and the token endpoint accepts it as `resource`. A token for a person carries the address of every product of the Provider. Null until the Provider sets it. No plan of the product is published, and no credential is issued on it, while it is null.",
+            "examples": [
+              "https://api.portal-labs.example"
+            ],
+            "title": "Resource"
+          },
           "status": {
             "$ref": "#/components/schemas/ProductStatus",
             "description": "`draft` until the first of its plans is published.",
@@ -3536,7 +3549,7 @@
       },
       "ProductUpdate": {
         "additionalProperties": false,
-        "description": "A JSON Merge Patch of a product (RFC 7386): what the Provider says about it.\n\n`forbid`: any other member is a 422, not a silent no-op — the name, the URL and the\ncapabilities come from the document, never from here. A member left out stays as it\nis, and `null` clears it: a cleared field is not set, so `null` has one meaning only.",
+        "description": "A JSON Merge Patch of a product (RFC 7386): what the Provider says about it, and the\naddress of its server.\n\n`forbid`: any other member is a 422, not a silent no-op — the name, the URL and the\ncapabilities come from the document, never from here. A member left out stays as it\nis, and `null` clears it: a cleared field is not set, so `null` has one meaning only.\n`resource` cannot be cleared.",
         "properties": {
           "description": {
             "anyOf": [
@@ -3577,6 +3590,23 @@
               ]
             ],
             "title": "Representative Queries"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The address of the product's server, exactly as its RFC 9728 metadata names it: the MCP endpoint itself, or the base URL of the API. `https`, with a host, and no user, query, fragment or final slash after a path. The scheme and the host are lowercase. It cannot be set back to null. A change reaches the next token: a token already minted keeps the old address until it expires, at most 30 minutes.",
+            "examples": [
+              "https://api.portal-labs.example"
+            ],
+            "title": "Resource"
           },
           "tags": {
             "anyOf": [
@@ -6426,7 +6456,7 @@
                 }
               }
             },
-            "description": "The subscription is canceled, the Provider has set no `resource` yet (`PATCH /orgs/{orgId}`), or the first request with this `Idempotency-Key` is still running."
+            "description": "The subscription is canceled, the Provider has set no `resource` on the subscription's product yet (`PATCH /products/{productId}`), or the first request with this `Idempotency-Key` is still running."
           },
           "422": {
             "content": {
@@ -6997,12 +7027,6 @@
                     "primary_color": "#0b5fff",
                     "secondary_color": "#003399"
                   }
-                },
-                "resource": {
-                  "summary": "A Provider sets the address of its MCP server",
-                  "value": {
-                    "resource": "https://mcp.portal-labs.example/mcp"
-                  }
                 }
               },
               "schema": {
@@ -7010,7 +7034,7 @@
               }
             }
           },
-          "description": "A JSON Merge Patch (RFC 7386). A member left out stays as it is. `resource` cannot be set back to null. A member of the brand set to null is removed.",
+          "description": "A JSON Merge Patch (RFC 7386). A member left out stays as it is. A member of the brand set to null is removed.",
           "required": true
         },
         "responses": {
@@ -7054,16 +7078,6 @@
             },
             "description": "No Provider has this id in the caller's tenant."
           },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The Provider's Consumers are in the shared realm, made before the Provider's own realm existed. That realm cannot carry a Provider's audience."
-          },
           "422": {
             "content": {
               "application/problem+json": {
@@ -7072,7 +7086,7 @@
                 }
               }
             },
-            "description": "The body is not a valid merge patch of a Provider: `resource` is not an https URL of the shape it needs, or is null; `logo_url` is not an https URL; a colour is not `#rrggbb`."
+            "description": "The body is not a valid merge patch of a Provider: `logo_url` is not an https URL; a colour is not `#rrggbb`. The address of a server is set on the product (`PATCH /products/{productId}`)."
           },
           "500": {
             "content": {
@@ -7092,7 +7106,7 @@
                 }
               }
             },
-            "description": "The issuer did not answer. keelie stored no change, and the issuer may hold the new address. Send the same patch again. `Retry-After` says when."
+            "description": "The issuer did not answer. keelie stored no change. Send the same patch again. `Retry-After` says when."
           }
         },
         "security": [
@@ -10005,7 +10019,7 @@
                 }
               }
             },
-            "description": "The plan cannot be published. `entity-conflict` when it is not a draft. `plan-not-publishable` when it breaks a rule: `detail` names the rule. `payments-not-ready` when it charges money and the Provider's Stripe account cannot take charges yet."
+            "description": "The plan cannot be published. `entity-conflict` when it is not a draft. `plan-not-publishable` when it breaks a rule, or when its product has no `resource` yet: `detail` names the rule. `payments-not-ready` when it charges money and the Provider's Stripe account cannot take charges yet."
           },
           "422": {
             "content": {
@@ -10197,8 +10211,9 @@
             "application/json": {
               "examples": {
                 "mcp": {
-                  "summary": "A Provider registers an MCP server",
+                  "summary": "A Provider registers an MCP server, with its address",
                   "value": {
+                    "resource": "https://mcp.portal-labs.example/mcp",
                     "type": "mcp",
                     "url": "https://mcp.portal-labs.example/mcp"
                   }
@@ -10266,7 +10281,7 @@
                 }
               }
             },
-            "description": "This Provider already registered a product at that URL."
+            "description": "This Provider already registered a product at that URL, or it sent a `resource` while its Consumers are in the shared realm."
           },
           "422": {
             "content": {
@@ -10306,7 +10321,7 @@
                 }
               }
             },
-            "description": "keelie already runs as many registrations as it will run at once. Nothing was created. `Retry-After` says when."
+            "description": "keelie already runs as many registrations as it will run at once, or the issuer did not take the `resource`. Nothing was created. `Retry-After` says when."
           }
         },
         "security": [
@@ -10487,6 +10502,12 @@
                       "travel"
                     ]
                   }
+                },
+                "resource": {
+                  "summary": "A Provider sets the address of the product's server",
+                  "value": {
+                    "resource": "https://api.portal-labs.example"
+                  }
                 }
               },
               "schema": {
@@ -10538,6 +10559,16 @@
             },
             "description": "No product has this id in the caller's tenant."
           },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The Provider's Consumers are in the shared realm, which cannot carry an address. The address did not change."
+          },
           "422": {
             "content": {
               "application/problem+json": {
@@ -10546,7 +10577,7 @@
                 }
               }
             },
-            "description": "The body is not a valid merge patch of a product."
+            "description": "The body is not a valid merge patch of a product: `resource` is not an https address of the allowed shape, or it is `null`."
           },
           "500": {
             "content": {
@@ -10557,6 +10588,16 @@
               }
             },
             "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The issuer did not answer. The address did not change."
           }
         },
         "security": [
@@ -10566,7 +10607,7 @@
             ]
           }
         ],
-        "summary": "Change what a product's catalog entry says",
+        "summary": "Change a product's catalog entry or its address",
         "tags": [
           "Products"
         ]
