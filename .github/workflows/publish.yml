@@ -1,0 +1,62 @@
+name: publish
+
+# Publishes the Python package `apiable` to PyPI through trusted publishing (OIDC). No PyPI token is
+# stored anywhere. PyPI trusts this file by name, in the environment `pypi`, so do not rename either.
+#
+# Release: set `version` in python/pyproject.toml, merge, then push the tag `python/v<version>`.
+# The tag names the package, because each package in this repository has its own version. The Go
+# module in go/ needs tags of the form `go/v<version>` for the same reason.
+on:
+  push:
+    tags:
+      - "python/v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          enable-cache: true
+      - name: The tag matches the version in pyproject.toml
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(uv version --short)"
+          if [ "$TAG" != "python/v$version" ]; then
+            echo "::error::The tag $TAG does not match the version $version in python/pyproject.toml."
+            exit 1
+          fi
+      - run: uv sync --locked
+      - run: uv run --locked pytest
+      - run: uv build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: python/dist/
+          if-no-files-found: error
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/apiable/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@v1.14.3
