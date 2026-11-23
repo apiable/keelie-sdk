@@ -212,6 +212,9 @@ What each line does:
   `consumer_id` names the Consumer on a token for a person, whose `azp` is an agent's client. On a
   credential's token it is `None`.
 
+For the Consumer website, clone [keelie-starter](https://github.com/apiable/keelie-starter). For a
+complete protected API, see its [`example-api/`](https://github.com/apiable/keelie-starter/tree/main/example-api).
+
 ## 6. Check it
 
 Start your API, then call it with no token.
