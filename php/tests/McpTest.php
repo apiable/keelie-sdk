@@ -152,6 +152,21 @@ final class McpTest extends TestCase
         self::assertSame('GET, POST, DELETE', $put->getHeaderLine('Allow'));
     }
 
+    public function testAnOverrideToPostIsReadAsAPost(): void
+    {
+        $token = Support::token(['aud' => self::MCP, 'scope' => 'orders:read']);
+        $body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"classify"}}';
+        foreach (['GET', 'DELETE'] as $method) {
+            $request = Support::request($method, self::MCP, $token, $body)->withHeader('X-HTTP-Method-Override', 'POST');
+            $app = new App();
+
+            self::assertSame(403, $this->guard->process($request, $app)->getStatusCode(), $method);
+            self::assertNull($app->request);
+        }
+        $put = Support::request('GET', self::MCP, $token, '{}')->withHeader('X-HTTP-Method-Override', 'PUT');
+        self::assertSame(405, $this->guard->process($put, new App())->getStatusCode());
+    }
+
     public function testARequestWithNoTokenIsRefusedBeforeTheBodyIsRead(): void
     {
         $response = $this->guard->process(Support::request('POST', self::MCP, null, '{'), new App());

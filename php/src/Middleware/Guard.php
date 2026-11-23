@@ -26,7 +26,14 @@ use Psr\Http\Server\RequestHandlerInterface;
  * Each guard also serves the RFC 9728 metadata at `$metadata->path`, with no token,
  * and refuses a request with no token with 401 and
  * `WWW-Authenticate: Bearer resource_metadata="..."`, so an agent can find your
- * issuer. Paths outside `resource` and a CORS preflight (OPTIONS) pass untouched.
+ * issuer. Paths outside `resource` and a CORS preflight pass untouched. A CORS
+ * preflight is an OPTIONS request with an `Access-Control-Request-Method` header.
+ * Any other OPTIONS request needs a token.
+ *
+ * A framework can read the method from a header, such as Slim's
+ * `MethodOverrideMiddleware` and Symfony do. So the guard reads those headers too
+ * ({@see METHOD_OVERRIDE_HEADERS}). A request passes without a token only if it
+ * passes as its own method and as each method the headers name.
  *
  * The verifier's audience must be the `resource` of the metadata, or the guard
  * throws when you make it. An agent asks keelie for a token with that `resource`
@@ -36,6 +43,8 @@ abstract class Guard implements MiddlewareInterface
 {
     /** The request attribute that holds the claims of a verified token. */
     public const CLAIMS_ATTRIBUTE = 'keelie.claims';
+    /** The headers a framework can read as the method of the request. */
+    public const METHOD_OVERRIDE_HEADERS = ['X-HTTP-Method-Override', 'X-HTTP-Method', 'X-Method-Override'];
 
     private readonly string $challenge;
     private readonly string $refusal;
@@ -75,9 +84,14 @@ abstract class Guard implements MiddlewareInterface
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
         $method = $request->getMethod();
+        $methods = self::methods($request);
         $path = $request->getUri()->getPath();
         $path = $path === '' ? '/' : $path;
-        if ($path === $this->metadata->path && ($method === 'GET' || $method === 'HEAD')) {
+        if ($methods === ['OPTIONS'] && $request->hasHeader('Access-Control-Request-Method')) {
+            // A CORS preflight carries no token, and your CORS middleware answers it.
+            return $handler->handle($request);
+        }
+        if ($path === $this->metadata->path && array_diff($methods, ['GET', 'HEAD']) === []) {
             // Before the token check: with a resource at the root, the metadata is
             // under it, and the agent reads it with no token.
             return Responses::make(
@@ -88,7 +102,7 @@ abstract class Guard implements MiddlewareInterface
                 $method === 'HEAD',
             );
         }
-        if (!PathForms::guarded($method, $path, $this->metadata)) {
+        if (!PathForms::guarded($methods, $path, $this->metadata)) {
             return $handler->handle($request);
         }
 
@@ -104,6 +118,23 @@ abstract class Guard implements MiddlewareInterface
         }
 
         return $this->handle($claims, $request->withAttribute(self::CLAIMS_ATTRIBUTE, $claims), $handler);
+    }
+
+    /**
+     * The request's method, and each method an override header names, in upper case.
+     *
+     * @return list<string>
+     */
+    protected static function methods(ServerRequestInterface $request): array
+    {
+        $methods = [$request->getMethod()];
+        foreach (self::METHOD_OVERRIDE_HEADERS as $name) {
+            foreach ($request->getHeader($name) as $value) {
+                $methods[] = strtoupper(trim($value));
+            }
+        }
+
+        return array_values(array_unique($methods));
     }
 
     /** Serve a request whose token verified. */

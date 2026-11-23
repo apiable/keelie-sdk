@@ -7,6 +7,7 @@ namespace Keelie;
 use Keelie\Internal\Json;
 use Keelie\Internal\JsonObject;
 use Keelie\Internal\Uuid;
+use Psr\SimpleCache\CacheInterface;
 
 /**
  * Report usage to keelie in batches, off the request path.
@@ -17,7 +18,8 @@ use Keelie\Internal\Uuid;
  *
  * - Under PHP-FPM, each request has its own memory. When the request ends, the
  *   reporter first ends the response to the client, with `fastcgi_finish_request()`,
- *   then sends the buffer. The client does not wait for the report.
+ *   then sends the buffer, for 2 seconds at most. The client does not wait for the
+ *   report, and the worker is free again after 2 seconds at most.
  * - In a worker that serves many requests, such as RoadRunner, Swoole, FrankenPHP
  *   or Laravel Octane, call {@see flushIfDue()} after each response. It sends a
  *   full batch at once, and the rest after 5 seconds. {@see close()} sends what is
@@ -44,7 +46,9 @@ use Keelie\Internal\Uuid;
  *
  * - A network error, a 401, 408, 409, 429 or a 5xx keeps the batch. It is sent
  *   again after one interval. Under PHP-FPM there is no later: the batch is
- *   dropped when the request ends, with a log line.
+ *   dropped when the request ends, with a log line. With a `$cache`, the
+ *   processes share the failure: for one interval after it, a request that ends
+ *   drops its events at once, and does not wait on keelie.
  * - Any other answer drops the batch, with a log line. A retry gets the same
  *   answer. `usage-out-of-range` is one of these.
  * - When the buffer is full, the oldest event goes, and a log line counts it.
@@ -72,6 +76,10 @@ final class UsageReporter
     public const FLUSH_INTERVAL_SECONDS = 5.0;
     public const MAX_BUFFERED_EVENTS = 10000;
     public const CLOSE_TIMEOUT_SECONDS = 10.0;
+    /** How long the worker of a PHP-FPM request waits on keelie, after the response. */
+    public const SHUTDOWN_TIMEOUT_SECONDS = 2.0;
+    /** The cache key that tells every process that keelie failed less than one interval ago. */
+    public const BACKOFF_CACHE_KEY = 'keelie.usage_backoff';
     /** The answers that can change on a retry. A 401 is one: the credential mints a new token. */
     private const RETRY_STATUSES = [401, 408, 409, 429];
     private const MAX_AMOUNT_DIGITS = 10; // 10 ** 9, the largest amount, has ten digits
@@ -94,6 +102,9 @@ final class UsageReporter
      * @param KeelieClient $keelie sends a request to keelie with the auth of a
      *                             credential that may report usage: an SdkCredential
      * @param bool $sendAtShutdown send what is left when PHP shuts down, after the response
+     * @param float $shutdownTimeoutSeconds how long the send at shutdown may take, a new token included
+     * @param CacheInterface|null $cache shares a failure between PHP-FPM processes, so that they do not
+     *                                   each wait on a keelie that is down
      * @param (\Closure(): float)|null $clock seconds since the epoch
      *
      * @throws \InvalidArgumentException when an option is out of range
@@ -104,6 +115,8 @@ final class UsageReporter
         private readonly float $flushIntervalSeconds = self::FLUSH_INTERVAL_SECONDS,
         private readonly int $maxBufferedEvents = self::MAX_BUFFERED_EVENTS,
         bool $sendAtShutdown = true,
+        private readonly float $shutdownTimeoutSeconds = self::SHUTDOWN_TIMEOUT_SECONDS,
+        private readonly ?CacheInterface $cache = null,
         ?\Closure $clock = null,
     ) {
         if ($batchSize < 1 || $batchSize > self::MAX_BATCH_SIZE) {
@@ -114,6 +127,9 @@ final class UsageReporter
         }
         if ($maxBufferedEvents < $batchSize) {
             throw new \InvalidArgumentException('maxBufferedEvents must be at least batchSize');
+        }
+        if (!($shutdownTimeoutSeconds > 0)) {
+            throw new \InvalidArgumentException('shutdownTimeoutSeconds must be more than 0');
         }
         $this->clock = $clock ?? static fn (): float => microtime(true);
         if ($sendAtShutdown) {
@@ -204,9 +220,10 @@ final class UsageReporter
     /**
      * Send what is in the buffer, once, and take no more events.
      *
-     * If a batch fails, or `$timeoutSeconds` pass, what is not sent is dropped,
-     * with one log line. A batch that is on its way when the time runs out
-     * finishes first. It never throws.
+     * The whole send takes `$timeoutSeconds` at most, a new token included. If a
+     * batch fails, or the time runs out, what is not sent is dropped, with one log
+     * line. With a `$cache` that holds a failure of the last interval, nothing is
+     * sent: the events are dropped at once. It never throws.
      */
     public function close(float $timeoutSeconds = self::CLOSE_TIMEOUT_SECONDS): void
     {
@@ -214,10 +231,15 @@ final class UsageReporter
             return;
         }
         $this->closed = true;
-        $this->sendAll($this->now() + $timeoutSeconds);
+        $reason = 'closed';
+        if ($this->buffered() > 0 && $this->backingOff()) {
+            $reason = 'keelie_unavailable';
+        } else {
+            $this->sendAll($this->now() + $timeoutSeconds);
+        }
         $lost = count($this->events) + ($this->pending['count'] ?? 0);
         if ($lost > 0) {
-            Log::warning("apiable.usage_dropped events={$lost} reason=closed");
+            Log::warning("apiable.usage_dropped events={$lost} reason={$reason}");
         }
         $this->events = [];
         $this->pending = null;
@@ -243,7 +265,7 @@ final class UsageReporter
                 litespeed_finish_request();
             }
         }
-        $this->close();
+        $this->close($this->shutdownTimeoutSeconds);
     }
 
     private function now(): float
@@ -256,12 +278,13 @@ final class UsageReporter
     {
         try {
             while ($this->pending !== null || $this->events !== []) {
-                if ($deadline !== null && $this->now() >= $deadline) {
+                $timeLeft = $deadline === null ? null : $deadline - $this->now();
+                if ($timeLeft !== null && $timeLeft <= 0) {
                     return;
                 }
                 $this->pending ??= $this->nextBatch();
-                if (!$this->send($this->pending)) {
-                    $this->failedAt = $this->now();
+                if (!$this->send($this->pending, $timeLeft)) {
+                    $this->failed();
 
                     return;
                 }
@@ -271,12 +294,41 @@ final class UsageReporter
         } catch (\Throwable $error) {
             // The reporter must outlive any failure.
             Log::warning('apiable.usage_flush_failed error=' . Log::errorName($error));
-            $this->failedAt = $this->now();
+            $this->failed();
         } finally {
             if ($this->dropped > 0) {
                 Log::warning("apiable.usage_dropped events={$this->dropped} reason=buffer_full");
                 $this->dropped = 0;
             }
+        }
+    }
+
+    /** Note a failed send, here and, with a cache, for every process. */
+    private function failed(): void
+    {
+        $this->failedAt = $this->now();
+        if ($this->cache === null) {
+            return;
+        }
+        try {
+            $this->cache->set(self::BACKOFF_CACHE_KEY, true, max(1, (int) ceil($this->flushIntervalSeconds)));
+        } catch (\Throwable $error) {
+            Log::warning('apiable.cache_failed error=' . Log::errorName($error));
+        }
+    }
+
+    /** True when a process failed to reach keelie less than one interval ago. */
+    private function backingOff(): bool
+    {
+        if ($this->cache === null) {
+            return false;
+        }
+        try {
+            return $this->cache->get(self::BACKOFF_CACHE_KEY) === true;
+        } catch (\Throwable $error) {
+            Log::warning('apiable.cache_failed error=' . Log::errorName($error));
+
+            return false;
         }
     }
 
@@ -297,15 +349,16 @@ final class UsageReporter
      * Send one batch. True when it is done with: kept by keelie, or dropped.
      *
      * @param array{key: string, body: string, count: int} $batch
+     * @param float|null $timeoutSeconds the longest the send may take, a new token included
      */
-    private function send(array $batch): bool
+    private function send(array $batch, ?float $timeoutSeconds): bool
     {
         $count = $batch['count'];
         try {
             $response = $this->keelie->request('POST', self::PATH, $batch['body'], [
                 'Content-Type' => 'application/json',
                 'Idempotency-Key' => $batch['key'],
-            ]);
+            ], $timeoutSeconds);
         } catch (\Throwable $error) {
             Log::warning("apiable.usage_not_sent events={$count} error=" . Log::errorName($error));
 
@@ -405,9 +458,14 @@ final class UsageReporter
             if (!is_finite($value)) {
                 return null;
             }
-            // The shortest decimal that reads back as this number. An exponent means
-            // more places, or more digits, than keelie keeps.
-            $text = json_encode($value, JSON_THROW_ON_ERROR);
+            // Six places, then a check that they read back as this number. Neither
+            // depends on php.ini: json_encode() and (string) follow serialize_precision
+            // and precision. A float that needs more than six places is refused.
+            $text = number_format($value, self::PLACES, '.', '');
+            if ((float) $text !== $value) {
+                return null;
+            }
+            $text = rtrim(rtrim($text, '0'), '.');
         } elseif (is_string($value)) {
             $text = $value;
         } else {

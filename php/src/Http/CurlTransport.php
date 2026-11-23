@@ -17,8 +17,13 @@ final class CurlTransport implements Transport
     {
     }
 
-    public function send(string $method, string $url, array $headers = [], ?string $body = null): Response
-    {
+    public function send(
+        string $method,
+        string $url,
+        #[\SensitiveParameter] array $headers = [],
+        #[\SensitiveParameter] ?string $body = null,
+        ?float $timeoutSeconds = null,
+    ): Response {
         $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
         if ($scheme !== 'https' && $scheme !== 'http') {
             throw new TransportError('not an http or https URL');
@@ -32,7 +37,8 @@ final class CurlTransport implements Transport
             $lines[] = "{$name}: {$value}";
         }
         $answerHeaders = [];
-        $timeout = max(1, (int) ceil($this->timeoutSeconds * 1000));
+        $seconds = $timeoutSeconds === null ? $this->timeoutSeconds : min($this->timeoutSeconds, $timeoutSeconds);
+        $timeout = max(1, (int) ceil($seconds * 1000));
         curl_setopt_array($curl, [
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_HTTPHEADER => $lines,

@@ -151,7 +151,7 @@ final class FakeIssuer implements Transport
     {
     }
 
-    public function send(string $method, string $url, array $headers = [], ?string $body = null): Response
+    public function send(string $method, string $url, array $headers = [], ?string $body = null, ?float $timeoutSeconds = null): Response
     {
         $this->requests[] = $url;
         if ($this->down) {
@@ -181,17 +181,20 @@ final class FakeIssuer implements Transport
 /** keelie: answers each request from a queue, and keeps what it was sent. */
 final class FakeKeelie implements KeelieClient
 {
-    /** @var list<array{method: string, path: string, body: ?string, headers: array<string, string>}> */
+    /** @var list<array{method: string, path: string, body: ?string, headers: array<string, string>, timeout: ?float}> */
     public array $requests = [];
 
     /** @param list<Response|\Throwable> $answers the default is 202 */
-    public function __construct(public array $answers = [])
+    public function __construct(public array $answers = [], public ?\Closure $onRequest = null)
     {
     }
 
-    public function request(string $method, string $path, ?string $body = null, array $headers = []): Response
+    public function request(string $method, string $path, ?string $body = null, array $headers = [], ?float $timeoutSeconds = null): Response
     {
-        $this->requests[] = ['method' => $method, 'path' => $path, 'body' => $body, 'headers' => $headers];
+        $this->requests[] = ['method' => $method, 'path' => $path, 'body' => $body, 'headers' => $headers, 'timeout' => $timeoutSeconds];
+        if ($this->onRequest !== null) {
+            ($this->onRequest)();
+        }
         $answer = array_shift($this->answers) ?? new Response(202);
         if ($answer instanceof \Throwable) {
             throw $answer;

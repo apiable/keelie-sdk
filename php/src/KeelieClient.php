@@ -18,9 +18,17 @@ interface KeelieClient
     /**
      * @param string $path keelie's path, such as `/usage-events:report`. The base URL and the auth are the client's own.
      * @param array<string, string> $headers
+     * @param float|null $timeoutSeconds the longest the whole call may take, a new token included.
+     *                                   Null: the client's own limit for each step.
      *
      * @throws TransportError for a network error, a timeout or a redirect
      * @throws \RuntimeException when the client cannot get a token
      */
-    public function request(string $method, string $path, ?string $body = null, array $headers = []): Response;
+    public function request(
+        string $method,
+        string $path,
+        ?string $body = null,
+        array $headers = [],
+        ?float $timeoutSeconds = null,
+    ): Response;
 }

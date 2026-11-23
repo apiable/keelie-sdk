@@ -86,7 +86,7 @@ $keys = new SigningKeys(env('KEELIE_ISSUER'), cache: $cache);
 $verifier = new TokenVerifier(env('KEELIE_ISSUER'), env('KEELIE_RESOURCE'), env('KEELIE_ORG_ID'), $keys);
 $metadata = new ProtectedResourceMetadata(env('KEELIE_RESOURCE'), env('KEELIE_ISSUER'));
 $scopes = new ScopeMap(['GET /v1/orders/{id}' => 'orders:read']);
-$reporter = new UsageReporter($keelie);
+$reporter = new UsageReporter($keelie, cache: $cache);
 
 $app = AppFactory::create();
 $responses = $app->getResponseFactory();
@@ -114,8 +114,16 @@ What each line does:
   costs the Consumer. `consumerId` names the Consumer on a token for a person, whose `azp` is an
   agent's client. On a credential's token it is `null`.
 - `$cache` is a PSR-16 cache, here APCu through `symfony/cache`. The processes of PHP-FPM share the
-  key set, the token of your SDK credential and the AI Catalog through it. Any PSR-16 cache fits,
-  such as Redis. Without a cache, each request fetches the key set again.
+  key set, the token of your SDK credential and the AI Catalog through it. They also share a failed
+  usage report, so that they do not each wait on a keelie that is down. Any PSR-16 cache fits, such
+  as Redis. Without a cache, each request fetches the key set again.
+
+**Give `TokenGuard` the path as your API's address names it.** The guard compares the path of the
+request with the path of `resource`. A proxy that strips a prefix, or a Slim base path, changes the
+path before the guard sees it. For `resource` `https://api.example.com/v1`, a proxy that sends
+`/v1/orders` on as `/orders` makes every route pass the guard with no token. A route with
+`ScopeGuard` then answers `500`. Add the guard where the path still starts with the path of
+`resource`, or register `resource` with the path your app sees.
 
 Then check it as in steps 6 and 7 of the quickstart.
 
@@ -126,13 +134,26 @@ When the request ends, the reporter:
 
 1. Ends the response to the client, with `fastcgi_finish_request()`. The client does not wait for
    the report. Laravel and Symfony already do this after they send the response.
-2. Sends the events of the request to keelie, in one batch, for at most 10 seconds.
+2. Sends the events of the request to keelie, in batches of 50, for at most 2 seconds in all. The
+   2 seconds include a new token for your SDK credential. After them, the PHP-FPM worker is free for
+   the next request, even when keelie is slow or down.
 
 A batch that fails is dropped, with the log line `apiable.usage_dropped ... reason=closed`. Under
 PHP-FPM there is no later request to send it again. Usage is telemetry for your dashboards and your
 spend caps, never an invoice line, so a lost batch costs no money.
 
-Give `sendAtShutdown: false` to turn this off, and call `$reporter->close()` yourself.
+With a `cache:`, the reporter writes the failure to the cache for one interval, 5 seconds. Each
+request that ends in that time drops its events at once, with the log line
+`apiable.usage_dropped ... reason=keelie_unavailable`, and does not wait on keelie. Without a
+cache, each request waits up to 2 seconds again.
+
+`fastcgi_finish_request()` exists only under PHP-FPM, and `litespeed_finish_request()` only under
+LiteSpeed. Under any other server API, such as Apache's mod_php or FrankenPHP outside worker mode,
+the client waits for the report, up to 2 seconds. There, give `sendAtShutdown: false`, and send the
+events from a queue or a worker of your own.
+
+Give `shutdownTimeoutSeconds:` to change the 2 seconds. Give `sendAtShutdown: false` to turn the
+send at shutdown off, and call `$reporter->close()` yourself.
 
 ### Usage in a worker
 
@@ -325,10 +346,17 @@ $app->add(new TokenGuard($verifier, $metadata, $responseFactory));
 | Request | Answer |
 |---|---|
 | `GET` or `HEAD` of the metadata address | `200`, the metadata. No token is needed. |
-| No Bearer token, or two `Authorization` headers | `401`, `WWW-Authenticate: Bearer resource_metadata="..."` |
+| No Bearer token, or two `Authorization` headers | `401`, `WWW-Authenticate: Bearer resource_metadata="..."`. Two headers are refused because your app could read the other one. |
 | A token that does not verify | `401`, `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="..."`, an empty body. The same answer for every reason. |
 | A token that verifies | Your app, with the claims in the request attribute `keelie.claims`. |
-| A path outside your address, or a CORS preflight (`OPTIONS`) | Your app, untouched. |
+| A path outside your address | Your app, untouched. |
+| A CORS preflight: `OPTIONS` with an `Access-Control-Request-Method` header | Your app, untouched. Your CORS middleware answers it. |
+| Any other `OPTIONS` | A token is needed, as for every other method. |
+
+A framework can read the method from a header: Slim's `MethodOverrideMiddleware` and Symfony do.
+So the guard reads `X-HTTP-Method-Override`, `X-HTTP-Method` and `X-Method-Override` too. A request
+passes with no token only if it passes as its own method and as each method those headers name. A
+preflight that names `DELETE` in `X-HTTP-Method-Override` needs a token.
 
 It compares the path in every form a router could route it by: as sent, with escapes read, with
 dot segments resolved, with doubled slashes folded, without a format extension such as `.json`, and
@@ -395,6 +423,7 @@ It answers as the Python `McpGuard` does:
 | A `tools/call` whose `params.name` is not a string | `400`, `-32602` |
 | A body over `maxBodyBytes` | `413`, `-32600` |
 | `GET`, `HEAD` or `DELETE` | Your server. |
+| A request whose method override header names `POST`, such as a `GET` with `X-HTTP-Method-Override: POST` | Read as a `POST`: the body is checked. |
 | Any other method | `405`, `Allow: GET, POST, DELETE` |
 
 ---
@@ -440,10 +469,14 @@ new UsageReporter(
     float $flushIntervalSeconds = 5.0,
     int $maxBufferedEvents = 10000,
     bool $sendAtShutdown = true,
+    float $shutdownTimeoutSeconds = 2.0,
+    ?CacheInterface $cache = null,
 )
 ```
 
-Make one reporter for the process.
+Make one reporter for the process. `$cache` is a PSR-16 cache that the processes of your app share.
+It holds one key, `keelie.usage_backoff`, for 5 seconds after a failed send. Give each app its own
+cache, or its own prefix in a shared one.
 
 ### `$reporter->record(string $clientId, string $capabilityKey, ...): void`
 
@@ -477,9 +510,10 @@ Sends every event now, unless a batch failed less than one interval ago. It neve
 
 ### `$reporter->close(float $timeoutSeconds = 10.0): void`
 
-Sends what is in the buffer, once, and takes no more events. What it cannot send is lost, with one
-log line. It never throws. The reporter calls it when PHP shuts down, unless you gave
-`sendAtShutdown: false`.
+Sends what is in the buffer, once, and takes no more events. The whole send takes
+`$timeoutSeconds` at most, a new token included. What it cannot send in that time is lost, with
+one log line. It never throws. The reporter calls it when PHP shuts down, with
+`$shutdownTimeoutSeconds`, unless you gave `sendAtShutdown: false`.
 
 ### What happens to a batch
 
@@ -509,7 +543,15 @@ secret or the token on to another address. A redirect fails the request.
 
 Give a `$cache` under PHP-FPM, so that the processes share one token. The cache then holds the
 token, which may report usage and read your products until it expires. It never holds the secret.
-The secret stays out of `var_dump()` and `print_r()`.
+
+The secret and the token are not properties of the object. `var_dump()`, `var_export()`,
+`print_r()`, an `(array)` cast and the `dump()` of Laravel and Symfony do not show them. A stack
+trace does not show them either. An `SdkCredential` cannot be cloned or serialized: either throws
+`LogicException`.
+
+`request()` takes a last argument, `?float $timeoutSeconds`. It is the longest the whole call may
+take: a new token, the request, and a second token and request after a `401`. `UsageReporter` uses
+it to keep within its time at shutdown.
 
 ---
 
@@ -538,14 +580,14 @@ Keelie\Log::setLogger($logger);
 | `apiable.usage_sent` | debug | keelie took a batch. |
 | `apiable.usage_not_sent` | warning | A batch failed and waits for a retry. |
 | `apiable.usage_flush_failed` | warning | A flush met an error. The batch waits for a retry. |
-| `apiable.usage_dropped` | warning | Events were lost: refused by keelie, buffer full, or not sent at shutdown. |
+| `apiable.usage_dropped` | warning | Events were lost: refused by keelie (`status=`), buffer full (`reason=buffer_full`), not sent at shutdown (`reason=closed`), or dropped because keelie failed less than 5 seconds ago (`reason=keelie_unavailable`). |
 | `apiable.catalog_fetch_failed` | warning | The SDK could not fetch the catalog. |
 
 ## Test with no network
 
 Every network call of the SDK goes through a `Keelie\Http\Transport`: one method,
-`send(string $method, string $url, array $headers = [], ?string $body = null): Response`. Give your
-own to the objects you make:
+`send(string $method, string $url, array $headers = [], ?string $body = null, ?float $timeoutSeconds = null): Response`.
+Give your own to the objects you make:
 
 ```php
 $keys = new SigningKeys($issuer, $fakeIssuer);
@@ -571,8 +613,13 @@ key, or with `exp` in the past.
 | Talking to keelie | An `httpx.AsyncClient` with the quickstart's `SdkCredential` | `Keelie\SdkCredential`, in the package |
 | State between requests | One process holds it | Under PHP-FPM, a PSR-16 cache you give. Without it, each request fetches the key set again. |
 | Background work | An asyncio task. `start()` in the lifespan, `await aclose()` at shutdown | None. Under PHP-FPM the events go when the request ends, after the response. In a worker, `flushIfDue()` after each response. |
-| A batch that fails | Sent again after one interval | The same in a worker. Under PHP-FPM, dropped when the request ends, with a log line. |
-| Amounts | `int` or `Decimal`. `Decimal("1.50")` is sent as `"1.50"` | `int`, `float` or `string`. `'1.50'` is sent as `"1.50"`. |
+| A batch that fails | Sent again after one interval | The same in a worker. Under PHP-FPM, dropped when the request ends, with a log line. With a cache, the other processes drop their events for one interval and do not wait on keelie. |
+| The send at shutdown | `await aclose()` waits up to 10 seconds | Under PHP-FPM, 2 seconds at most, after the response. Under another server API, the client waits for it. |
+| Two `Authorization` headers | The first is verified | `401`, as with no token: your app could read the other one |
+| An `OPTIONS` request | Passes with no token | Passes only as a CORS preflight, with `Access-Control-Request-Method`. Any other needs a token. |
+| A method override header, such as `X-HTTP-Method-Override` | Not read | Read. A request passes with no token only if it passes as each method it names. `McpGuard` reads an override to `POST` as a `POST`. |
+| A `HEAD` of a route | Checked against the map's `HEAD` entry | `ScopeGuard` checks it as a `GET` when the map has no `HEAD` entry |
+| Amounts | `int` or `Decimal`. `Decimal("1.50")` is sent as `"1.50"`. A `float` is refused. | `int`, `float` or `string`. `'1.50'` is sent as `"1.50"`. A `float` is taken when it has six places at most, whatever `precision` and `serialize_precision` say in php.ini. |
 | Path comparison | As the ASGI server gives it | Every form a router could route, without case, as in Node and Ruby |
 | A `resource` that ends in an empty query or fragment, such as `https://api.example.com/v1?` | Accepted | Refused, as in Node |
 | An RSA key under 2048 bits in the key set | Loaded | Skipped, with a log line, as in Node |

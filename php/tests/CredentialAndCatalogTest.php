@@ -17,15 +17,20 @@ use PHPUnit\Framework\TestCase;
 /** The token endpoint and keelie, behind one fake transport. */
 final class FakeKeelieServer implements Transport
 {
-    /** @var list<array{method: string, url: string, headers: array<string, string>, body: ?string}> */
+    /** @var list<array{method: string, url: string, headers: array<string, string>, body: ?string, timeout: ?float}> */
     public array $requests = [];
     public int $minted = 0;
     /** @var list<Response> */
     public array $keelieAnswers = [];
+    /** Run before each answer, such as to move a clock on. */
+    public ?\Closure $onSend = null;
 
-    public function send(string $method, string $url, array $headers = [], ?string $body = null): Response
+    public function send(string $method, string $url, array $headers = [], ?string $body = null, ?float $timeoutSeconds = null): Response
     {
-        $this->requests[] = ['method' => $method, 'url' => $url, 'headers' => $headers, 'body' => $body];
+        $this->requests[] = ['method' => $method, 'url' => $url, 'headers' => $headers, 'body' => $body, 'timeout' => $timeoutSeconds];
+        if ($this->onSend !== null) {
+            ($this->onSend)();
+        }
         if ($url === 'https://issuer.keelie.io/token') {
             $this->minted++;
 
@@ -106,12 +111,86 @@ final class CredentialAndCatalogTest extends TestCase
         self::assertStringNotContainsString('s3cret', serialize($cache->values));
     }
 
-    public function testTheSecretStaysOutOfADump(): void
+    public function testTheSecretAndTheTokenStayOutOfEveryDump(): void
+    {
+        $server = new FakeKeelieServer();
+        $credential = self::credential($server, new Clock());
+        $credential->request('GET', '/ai-catalog');
+        // The fake keeps what it was sent. A real transport keeps nothing.
+        $server->requests = [];
+        ob_start();
+        var_dump($credential);
+        $dumps = [
+            (string) ob_get_clean(),
+            print_r($credential, true),
+            var_export($credential, true),
+            var_export((array) $credential, true),
+            print_r(get_object_vars($credential), true),
+        ];
+
+        foreach ($dumps as $dump) {
+            self::assertStringNotContainsString('s3cret', $dump);
+            self::assertStringNotContainsString('token-1', $dump);
+        }
+    }
+
+    public function testTheCredentialCannotBeClonedOrSerialized(): void
     {
         $credential = self::credential(new FakeKeelieServer(), new Clock());
+        foreach ([static fn () => clone $credential, static fn () => serialize($credential)] as $copy) {
+            try {
+                $copy();
+                self::fail('a copy was made');
+            } catch (\LogicException) {
+                self::addToAssertionCount(1);
+            }
+        }
+    }
 
-        self::assertStringNotContainsString('s3cret', print_r($credential, true));
-        self::assertStringNotContainsString('s3cret', var_export((array) $credential->__debugInfo(), true));
+    public function testTheSecretStaysOutOfTheTraceOfAFailedMint(): void
+    {
+        $credential = new SdkCredential(
+            'https://keelie.example.com',
+            'https://127.0.0.1:1/token',
+            'sdk-client',
+            's3cret value',
+            timeoutSeconds: 0.5,
+        );
+        try {
+            $credential->request('GET', '/ai-catalog');
+            self::fail('the mint passed');
+        } catch (TransportError $error) {
+            // The frames of the SDK. The test's own frames hold the secret it gave.
+            $frames = array_filter(
+                $error->getTrace(),
+                static fn (array $frame): bool => str_starts_with($frame['class'] ?? '', 'Keelie\\')
+                    && !str_starts_with($frame['class'] ?? '', 'Keelie\\Tests\\'),
+            );
+            self::assertNotSame([], $frames);
+            self::assertStringNotContainsString('s3cret', print_r($frames, true));
+        }
+    }
+
+    public function testOneTimeLimitCoversTheMintTheSendAndTheRetry(): void
+    {
+        $server = new FakeKeelieServer();
+        $clock = new Clock();
+        // Each answer takes 1.5 seconds, and keelie refuses every token.
+        $server->onSend = static function () use ($clock): void {
+            $clock->now += 1.5;
+        };
+        $server->keelieAnswers = [new Response(401), new Response(401)];
+        $credential = self::credential($server, $clock);
+
+        try {
+            $credential->request('POST', '/usage-events:report', '{}', [], 2.0);
+            self::fail('the request passed');
+        } catch (TransportError) {
+            self::addToAssertionCount(1);
+        }
+
+        // The mint got 2 seconds, the send what was left. No time was left for the second mint.
+        self::assertSame([2.0, 0.5], array_column($server->requests, 'timeout'));
     }
 
     public function testTheCurlTransportRefusesAUrlThatIsNotHttp(): void

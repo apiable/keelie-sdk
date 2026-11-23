@@ -114,6 +114,41 @@ final class UsageTest extends TestCase
         yield 'zeros past six places' => ['0.0000010', '0.000001'];
         yield 'leading zeros' => ['007', '7'];
         yield 'the largest' => ['1000000000', '1000000000'];
+        yield 'a float with six places' => [0.000001, '0.000001'];
+        yield 'a large float' => [123456789.5, '123456789.5'];
+    }
+
+    /** @return iterable<string, array{float}> */
+    public static function badFloats(): iterable
+    {
+        yield 'seven places' => [0.0000001];
+        yield 'a sum that is not exact' => [0.1 + 0.2];
+        yield 'too large' => [1e20];
+        yield 'negative' => [-0.5];
+    }
+
+    #[DataProvider('badFloats')]
+    public function testAFloatKeelieCannotReadIsRefused(float $amount): void
+    {
+        self::assertNull(UsageReporter::formatAmount($amount, true));
+    }
+
+    public function testAFloatIsSentTheSameWhateverPhpIniSays(): void
+    {
+        $serialize = (string) ini_get('serialize_precision');
+        $precision = (string) ini_get('precision');
+        try {
+            foreach ([['17', '17'], ['-1', '14'], ['5', '5']] as [$serializePrecision, $plainPrecision]) {
+                ini_set('serialize_precision', $serializePrecision);
+                ini_set('precision', $plainPrecision);
+                self::assertSame('0.1', UsageReporter::formatAmount(0.1, true));
+                self::assertSame('0.25', UsageReporter::formatAmount(0.25, false));
+                self::assertSame('123456.123456', UsageReporter::formatAmount(123456.123456, true));
+            }
+        } finally {
+            ini_set('serialize_precision', $serialize);
+            ini_set('precision', $precision);
+        }
     }
 
     #[DataProvider('amounts')]
@@ -212,7 +247,7 @@ final class UsageTest extends TestCase
         self::assertStringContainsString('apiable.usage_dropped events=1 reason=closed', $this->logs->text());
     }
 
-    public function testShutdownSendsWhatIsLeft(): void
+    public function testShutdownSendsWhatIsLeftWithinTwoSeconds(): void
     {
         $keelie = new FakeKeelie();
         $reporter = $this->reporter($keelie);
@@ -220,14 +255,53 @@ final class UsageTest extends TestCase
         $reporter->shutdown();
 
         self::assertCount(1, $keelie->requests);
+        self::assertSame(UsageReporter::SHUTDOWN_TIMEOUT_SECONDS, $keelie->requests[0]['timeout']);
+    }
+
+    public function testCloseStopsWhenItsTimeIsUp(): void
+    {
+        // Each batch takes 1.5 seconds and fails.
+        $keelie = new FakeKeelie([new Response(503)], function (): void {
+            $this->clock->now += 1.5;
+        });
+        $reporter = $this->reporter($keelie, batchSize: 1);
+        $reporter->record('client', 'GET /a');
+        $reporter->record('client', 'GET /b');
+        $reporter->close(2.0);
+
+        self::assertSame([2.0], array_column($keelie->requests, 'timeout'));
+        self::assertStringContainsString('apiable.usage_dropped events=2 reason=closed', $this->logs->text());
+    }
+
+    public function testACacheSharesAFailureSoOtherProcessesDoNotWaitOnKeelie(): void
+    {
+        $cache = new ArrayCache();
+        $keelie = new FakeKeelie([new TransportError('timeout')]);
+        $first = new UsageReporter($keelie, sendAtShutdown: false, cache: $cache, clock: $this->clock->closure());
+        $first->record('client', 'GET /a');
+        $first->shutdown();
+
+        $second = new UsageReporter($keelie, sendAtShutdown: false, cache: $cache, clock: $this->clock->closure());
+        $second->record('client', 'GET /b');
+        $second->shutdown();
+
+        self::assertCount(1, $keelie->requests);
+        self::assertStringContainsString('apiable.usage_dropped events=1 reason=keelie_unavailable', $this->logs->text());
+
+        // The failure lasts one interval: the cache drops it, and the next process sends again.
+        $cache->clear();
+        $third = new UsageReporter($keelie, sendAtShutdown: false, cache: $cache, clock: $this->clock->closure());
+        $third->record('client', 'GET /c');
+        $third->shutdown();
+        self::assertCount(2, $keelie->requests);
     }
 
     public function testBadOptionsAreRefusedWhenTheReporterIsMade(): void
     {
-        foreach ([[0, 5.0, 10], [1001, 5.0, 2000], [10, 0.0, 10], [10, 5.0, 9]] as [$batch, $interval, $max]) {
+        foreach ([[0, 5.0, 10, 2.0], [1001, 5.0, 2000, 2.0], [10, 0.0, 10, 2.0], [10, 5.0, 9, 2.0], [10, 5.0, 10, 0.0]] as [$batch, $interval, $max, $shutdown]) {
             try {
-                new UsageReporter(new FakeKeelie(), $batch, $interval, $max, false);
-                self::fail("{$batch} {$interval} {$max} passed");
+                new UsageReporter(new FakeKeelie(), $batch, $interval, $max, false, $shutdown);
+                self::fail("{$batch} {$interval} {$max} {$shutdown} passed");
             } catch (\InvalidArgumentException) {
                 self::addToAssertionCount(1);
             }

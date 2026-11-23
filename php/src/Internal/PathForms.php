@@ -33,17 +33,18 @@ final class PathForms
     /**
      * True for a request under `resource` that must carry a token.
      *
-     * A CORS preflight (OPTIONS) and every path outside `resource` pass. So does a
-     * GET or a HEAD of the metadata, and of the AI Catalog at either of its paths
-     * when the catalog serves it. Any other method on those paths needs a token.
+     * Every path outside `resource` passes. So does a GET or a HEAD of the
+     * metadata, and of the AI Catalog at either of its paths when the catalog
+     * serves it. Any other method on those paths needs a token. A CORS preflight
+     * is the guard's to pass, not this method's.
+     *
+     * @param list<string> $methods the request's method, and each method an override
+     *                              header names: a path passes only if it passes for all
      */
-    public static function guarded(string $method, string $path, ProtectedResourceMetadata $metadata): bool
+    public static function guarded(array $methods, string $path, ProtectedResourceMetadata $metadata): bool
     {
-        if ($method === 'OPTIONS') {
-            return false;
-        }
         if (
-            in_array($method, ['GET', 'HEAD'], true)
+            array_diff($methods, ['GET', 'HEAD']) === []
             && ($path === $metadata->path || ($metadata->aiCatalog && isset(AiCatalog::MEDIA_TYPES[$path])))
         ) {
             return false;

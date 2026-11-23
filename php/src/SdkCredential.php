@@ -7,6 +7,7 @@ namespace Keelie;
 use Keelie\Http\CurlTransport;
 use Keelie\Http\Response;
 use Keelie\Http\Transport;
+use Keelie\Http\TransportError;
 use Keelie\Internal\Json;
 use Keelie\Internal\JsonObject;
 use Psr\SimpleCache\CacheInterface;
@@ -31,17 +32,27 @@ use Psr\SimpleCache\CacheInterface;
  * Without it, each request that talks to keelie mints a token. The cache then
  * holds the token, which may report usage and read your products until it expires.
  * It never holds the secret.
+ *
+ * The secret and the token are not properties of the object. `var_dump()`,
+ * `var_export()`, `print_r()`, an `(array)` cast and a framework's `dump()` do not
+ * show them. The object cannot be cloned or serialized.
  */
 final class SdkCredential implements KeelieClient
 {
     public const TIMEOUT_SECONDS = 10.0;
 
+    /**
+     * The secret and the token of each credential, outside its properties, so that
+     * no dump of the object shows them.
+     *
+     * @var \WeakMap<self, array{secret: string, token: ?string}>|null
+     */
+    private static ?\WeakMap $vault = null;
+
     private readonly string $base;
     private readonly Transport $http;
     private readonly \Closure $clock;
-    private readonly string $form;
     private readonly string $cacheKey;
-    private ?string $token = null;
     private float $expiresAt = 0.0;
 
     /**
@@ -55,7 +66,7 @@ final class SdkCredential implements KeelieClient
     public function __construct(
         string $keelieUrl,
         private readonly string $tokenUrl,
-        string $clientId,
+        private readonly string $clientId,
         #[\SensitiveParameter] string $clientSecret,
         float $timeoutSeconds = self::TIMEOUT_SECONDS,
         ?Transport $http = null,
@@ -65,59 +76,132 @@ final class SdkCredential implements KeelieClient
         $this->base = rtrim($keelieUrl, '/');
         $this->http = $http ?? new CurlTransport($timeoutSeconds);
         $this->clock = $clock ?? static fn (): float => microtime(true);
-        $this->form = http_build_query([
-            'grant_type' => 'client_credentials',
-            'client_id' => $clientId,
-            'client_secret' => $clientSecret,
-        ], '', '&', PHP_QUERY_RFC1738);
+        self::$vault ??= new \WeakMap();
+        self::$vault[$this] = ['secret' => $clientSecret, 'token' => null];
         $this->cacheKey = 'keelie.sdk_token.' . substr(hash('sha256', "{$tokenUrl} {$clientId}"), 0, 32);
     }
 
-    public function request(string $method, string $path, ?string $body = null, array $headers = []): Response
-    {
-        $token = $this->freshToken(null);
-        $response = $this->send($token, $method, $path, $body, $headers);
+    public function request(
+        string $method,
+        string $path,
+        ?string $body = null,
+        array $headers = [],
+        ?float $timeoutSeconds = null,
+    ): Response {
+        $deadline = $timeoutSeconds === null ? null : $this->now() + $timeoutSeconds;
+        $token = $this->freshToken(null, $deadline);
+        $response = $this->send($token, $method, $path, $body, $headers, $deadline);
         if ($response->status !== 401) {
             return $response;
         }
 
-        return $this->send($this->freshToken($token), $method, $path, $body, $headers);
+        return $this->send($this->freshToken($token, $deadline), $method, $path, $body, $headers, $deadline);
     }
 
     /** @return array<string, string> the secret and the token stay out of var_dump() and print_r() */
     public function __debugInfo(): array
     {
-        return ['keelieUrl' => $this->base, 'tokenUrl' => $this->tokenUrl];
+        return ['keelieUrl' => $this->base, 'tokenUrl' => $this->tokenUrl, 'clientId' => $this->clientId];
+    }
+
+    /** A copy would have no secret. */
+    public function __clone()
+    {
+        throw new \LogicException('an SdkCredential cannot be cloned');
+    }
+
+    /**
+     * Serialized, the credential would lose its secret, or write it somewhere.
+     *
+     * @return never
+     */
+    public function __serialize(): array
+    {
+        throw new \LogicException('an SdkCredential cannot be serialized');
+    }
+
+    /** @param array<mixed> $data */
+    public function __unserialize(array $data): void
+    {
+        throw new \LogicException('an SdkCredential cannot be serialized');
+    }
+
+    private function now(): float
+    {
+        return (float) ($this->clock)();
+    }
+
+    /**
+     * The time left before `$deadline`, or null when there is none.
+     *
+     * @throws TransportError when no time is left
+     */
+    private function timeLeft(?float $deadline): ?float
+    {
+        if ($deadline === null) {
+            return null;
+        }
+        $left = $deadline - $this->now();
+        if ($left <= 0) {
+            throw new TransportError('timeout');
+        }
+
+        return $left;
+    }
+
+    private function token(): ?string
+    {
+        return (self::$vault[$this] ?? null)['token'] ?? null;
+    }
+
+    private function keepToken(string $token): void
+    {
+        $entry = self::$vault[$this];
+        $entry['token'] = $token;
+        self::$vault[$this] = $entry;
     }
 
     /** @param array<string, string> $headers */
-    private function send(string $token, string $method, string $path, ?string $body, array $headers): Response
-    {
+    private function send(
+        #[\SensitiveParameter] string $token,
+        string $method,
+        string $path,
+        ?string $body,
+        array $headers,
+        ?float $deadline,
+    ): Response {
         $headers['Authorization'] = "Bearer {$token}";
 
-        return $this->http->send($method, $this->base . $path, $headers, $body);
+        return $this->http->send($method, $this->base . $path, $headers, $body, $this->timeLeft($deadline));
     }
 
     /** The token to send. `$refused` is a token keelie answered 401: mint again, unless another process already has. */
-    private function freshToken(?string $refused): string
+    private function freshToken(#[\SensitiveParameter] ?string $refused, ?float $deadline): string
     {
-        $now = (float) ($this->clock)();
-        if ($this->token === null || $now >= $this->expiresAt || $this->token === $refused) {
+        $now = $this->now();
+        $token = $this->token();
+        if ($token === null || $now >= $this->expiresAt || $token === $refused) {
             $this->adoptCache($now);
+            $token = $this->token();
         }
-        if ($this->token === null || $now >= $this->expiresAt || $this->token === $refused) {
-            $this->mint($now);
+        if ($token === null || $now >= $this->expiresAt || $token === $refused) {
+            $token = $this->mint($now, $deadline);
         }
 
-        return (string) $this->token;
+        return $token;
     }
 
-    private function mint(float $now): void
+    private function mint(float $now, ?float $deadline): string
     {
+        $form = http_build_query([
+            'grant_type' => 'client_credentials',
+            'client_id' => $this->clientId,
+            'client_secret' => self::$vault[$this]['secret'],
+        ], '', '&', PHP_QUERY_RFC1738);
         $response = $this->http->send('POST', $this->tokenUrl, [
             'Content-Type' => 'application/x-www-form-urlencoded',
             'Accept' => 'application/json',
-        ], $this->form);
+        ], $form, $this->timeLeft($deadline));
         if (!$response->ok()) {
             throw new \RuntimeException("the token endpoint answered {$response->status}");
         }
@@ -131,7 +215,7 @@ final class SdkCredential implements KeelieClient
         if (!is_string($token) || !(is_int($lifetime) || is_float($lifetime))) {
             throw new \RuntimeException('the token endpoint answered without a token');
         }
-        $this->token = $token;
+        $this->keepToken($token);
         // Mint again before the token expires.
         $this->expiresAt = $now + max($lifetime - 30, $lifetime / 2);
         if ($this->cache !== null) {
@@ -142,6 +226,8 @@ final class SdkCredential implements KeelieClient
                 Log::warning('apiable.cache_failed error=' . Log::errorName($error));
             }
         }
+
+        return $token;
     }
 
     private function adoptCache(float $now): void
@@ -160,7 +246,7 @@ final class SdkCredential implements KeelieClient
             is_array($state) && is_string($state['token'] ?? null)
             && is_float($state['expires_at'] ?? null) && $now < $state['expires_at']
         ) {
-            $this->token = $state['token'];
+            $this->keepToken($state['token']);
             $this->expiresAt = $state['expires_at'];
         }
     }

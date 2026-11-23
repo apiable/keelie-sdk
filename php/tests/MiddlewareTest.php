@@ -112,16 +112,47 @@ final class MiddlewareTest extends TestCase
         self::assertSame(200, $head->getStatusCode());
         self::assertSame('', (string) $head->getBody());
         self::assertSame((string) strlen($this->metadata->document), $head->getHeaderLine('Content-Length'));
+
+        // A read that a header turns into a POST is not served as the metadata.
+        $app = new App();
+        $post = Support::request('GET', 'https://api.example.com/.well-known/oauth-protected-resource/v1')
+            ->withHeader('X-HTTP-Method', 'post');
+        self::through($post, $app, $this->guard);
+        self::assertNotNull($app->request);
     }
 
     public function testPathsOutsideTheResourceAndAPreflightPassUntouched(): void
     {
         foreach ([['GET', '/health'], ['GET', '/v10'], ['OPTIONS', '/v1/orders']] as [$method, $path]) {
             $app = new App();
-            $response = self::through(Support::request($method, "https://api.example.com{$path}"), $app, $this->guard);
+            $request = Support::request($method, "https://api.example.com{$path}")->withHeader('Access-Control-Request-Method', 'GET');
+            $response = self::through($request, $app, $this->guard);
             self::assertSame(200, $response->getStatusCode(), "{$method} {$path}");
             self::assertNull($app->request?->getAttribute(Guard::CLAIMS_ATTRIBUTE));
         }
+    }
+
+    /** @return iterable<string, array{string, string, array<string, string>}> */
+    public static function notPreflights(): iterable
+    {
+        yield 'an OPTIONS with no preflight header' => ['OPTIONS', '/v1/orders/1', []];
+        yield 'a preflight that overrides its method' => ['OPTIONS', '/v1/orders/1', ['Access-Control-Request-Method' => 'GET', 'X-HTTP-Method-Override' => 'DELETE']];
+        yield 'another override header' => ['OPTIONS', '/v1/orders/1', ['Access-Control-Request-Method' => 'GET', 'X-Method-Override' => 'PUT']];
+    }
+
+    /** @param array<string, string> $headers */
+    #[DataProvider('notPreflights')]
+    public function testOnlyAPreflightOrAReadOfTheMetadataPassesWithNoToken(string $method, string $path, array $headers): void
+    {
+        $request = Support::request($method, "https://api.example.com{$path}");
+        foreach ($headers as $name => $value) {
+            $request = $request->withHeader($name, $value);
+        }
+        $app = new App();
+        $response = self::through($request, $app, $this->guard);
+
+        self::assertSame(401, $response->getStatusCode());
+        self::assertNull($app->request);
     }
 
     /** @return iterable<string, array{string}> */

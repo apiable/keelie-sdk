@@ -40,8 +40,9 @@ use Psr\Http\Server\RequestHandlerInterface;
  * - Every other method passes with no scope check: `initialize`,
  *   `notifications/*`, `ping`, `tools/list`, and also `resources/*` and
  *   `prompts/*`. Apiable sells tools, not resources or prompts.
- * - GET, HEAD and DELETE pass, and so does a CORS preflight (OPTIONS). Every
- *   other method gets 405, with `Allow: GET, POST, DELETE`.
+ * - GET, HEAD and DELETE pass, and so does a CORS preflight. Every other method
+ *   gets 405, with `Allow: GET, POST, DELETE`. A request whose override header
+ *   names POST is read as a POST, whatever its own method.
  *
  * Every refusal is a JSON-RPC error:
  *
@@ -102,12 +103,12 @@ final class McpGuard extends Guard
         ServerRequestInterface $request,
         RequestHandlerInterface $handler,
     ): ResponseInterface {
-        $method = $request->getMethod();
-        if (in_array($method, self::PASS_METHODS, true)) {
+        $methods = self::methods($request);
+        if (array_diff($methods, self::PASS_METHODS) === []) {
             return $handler->handle($request);
         }
         // A body under any other method could carry a tool call: refuse it.
-        if ($method !== 'POST') {
+        if (!in_array('POST', $methods, true)) {
             return Responses::make($this->responses, 405, ['Allow' => 'GET, POST, DELETE']);
         }
 
