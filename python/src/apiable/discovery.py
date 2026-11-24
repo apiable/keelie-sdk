@@ -41,6 +41,11 @@ CATALOG_MEDIA_TYPES = {
     CATALOG_PATH: b"application/ai-catalog+json",
 }
 
+# The hosts on which plain http is allowed, for local development: for the issuer,
+# its ``jwks_uri`` and the ``authorization_server``. ``urlsplit`` lowercases the
+# host, so ``LOCALHOST`` is one of them too.
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
 Scope = MutableMapping[str, object]
 Message = MutableMapping[str, object]
 Receive = Callable[[], Awaitable[Message]]
@@ -52,8 +57,11 @@ ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 _URL = re.compile(r"[!#-\[\]-~]+")
 
 
-def _https_url(name: str, value: str) -> str:
+def _https_url(name: str, value: str, *, loopback_http: bool = False) -> str:
     """The value, if it is an https URL with a host and no query or fragment.
+
+    With ``loopback_http``, plain http is allowed too, on a loopback host only: the
+    same rule as for the issuer of :class:`~apiable.TokenVerifier`.
 
     The scheme and the host must be lowercase: an uppercase one is refused, not
     folded. keelie stores your ``resource`` with the same rule and puts it into
@@ -62,8 +70,9 @@ def _https_url(name: str, value: str) -> str:
     if not isinstance(value, str) or not _URL.fullmatch(value):
         raise ValueError(f"{name} is not a URL: {value!r}")
     parts = urlsplit(value)
+    http_ok = loopback_http and parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS
     if (
-        parts.scheme != "https"
+        (parts.scheme != "https" and not http_ok)
         or not parts.hostname
         or parts.username is not None
         or parts.query
@@ -75,7 +84,7 @@ def _https_url(name: str, value: str) -> str:
         )
     parts.port  # noqa: B018 - raises ValueError for a port that is not a number
     # `urlsplit` lowercases the scheme, so read the text as it was written.
-    if not value.startswith("https://") or parts.netloc != parts.netloc.lower():
+    if not value.startswith(f"{parts.scheme}://") or parts.netloc != parts.netloc.lower():
         raise ValueError(f"{name} must have a lowercase scheme and host: {value!r}")
     return value
 
@@ -99,7 +108,10 @@ class ProtectedResourceMetadata:
         scopes_supported: Iterable[str] | None = None,
     ) -> None:
         self.resource = _https_url("resource", resource)
-        issuer = _https_url("authorization_server", authorization_server)
+        self.authorization_server = _https_url(
+            "authorization_server", authorization_server, loopback_http=True
+        )
+        issuer = self.authorization_server
         parts = urlsplit(self.resource)
         # The well-known name goes between the host and the path (RFC 9728 section 3.1).
         self._prefix = "" if parts.path in ("", "/") else parts.path.rstrip("/")
@@ -153,11 +165,12 @@ class MissingTokenChallenge:
     It also serves the metadata, at ``metadata.path``, with no token. Every
     other path outside ``resource`` passes untouched, and so do a GET or a HEAD
     of the AI Catalog, at either of its paths, when
-    :class:`~apiable.catalog.AiCatalog` serves it, a CORS preflight
-    (``OPTIONS``) and every request that is not HTTP, such as a WebSocket.
+    :class:`~apiable.catalog.AiCatalog` serves it, a CORS preflight (see
+    :func:`guarded`) and every request that is not HTTP, such as a WebSocket.
 
-    It compares the path the app receives with the path in ``resource``. Mount
-    it where those two agree: behind a proxy that strips a prefix, they do not.
+    It compares the path the app receives with the path in ``resource``. The
+    app must see the same path as the public ``resource``. A proxy or a gateway
+    that strips the prefix, such as ``/v1``, leaves every route unguarded.
     """
 
     def __init__(self, app: ASGIApp, metadata: ProtectedResourceMetadata) -> None:
@@ -198,11 +211,15 @@ async def respond(
 def guarded(scope: Scope, metadata: ProtectedResourceMetadata) -> bool:
     """True for an HTTP request under ``resource`` that must carry a token.
 
-    A CORS preflight (``OPTIONS``), every path outside ``resource`` and every
-    request that is not HTTP pass untouched. So does a GET or a HEAD of the
-    metadata, and of the AI Catalog at either of its paths when
-    :class:`~apiable.catalog.AiCatalog` serves it. Any other method on those
-    paths needs a token.
+    A CORS preflight, every path outside ``resource`` and every request that is
+    not HTTP pass untouched. So does a GET or a HEAD of the metadata, and of the
+    AI Catalog at either of its paths when :class:`~apiable.catalog.AiCatalog`
+    serves it. Any other method on those paths needs a token.
+
+    A preflight is an ``OPTIONS`` with an ``Origin`` and an
+    ``Access-Control-Request-Method`` header, and no method-override header.
+    Every other ``OPTIONS`` needs a token, like any other method. The Provider's
+    CORS middleware answers the preflight.
     """
     path = scope.get("path")
     method = scope.get("method")
@@ -212,9 +229,33 @@ def guarded(scope: Scope, metadata: ProtectedResourceMetadata) -> bool:
         return False
     return (
         scope["type"] == "http"
-        and method != "OPTIONS"
+        and not is_preflight(scope)
         and isinstance(path, str)
         and metadata.protects(path)
+    )
+
+
+# A framework can route a request by one of these headers instead of its method.
+# An ``OPTIONS`` that carries one is not passed as a preflight.
+# A preflight also carries ``Origin``: a CORS middleware passes an ``OPTIONS`` with
+# no ``Origin`` on to the app, so without it the route would run with no token.
+_METHOD_OVERRIDES = frozenset({b"x-http-method-override", b"x-http-method", b"x-method-override"})
+
+
+def is_preflight(scope: Scope) -> bool:
+    """True for a CORS preflight.
+
+    That is an ``OPTIONS`` with ``Origin`` and ``Access-Control-Request-Method``, and
+    no method-override header.
+    """
+    if scope.get("method") != "OPTIONS":
+        return False
+    headers = scope.get("headers") or []
+    names = {name.lower() for name, _ in headers}  # ASGI: (name, value) byte pairs
+    return (
+        b"origin" in names
+        and b"access-control-request-method" in names
+        and not names & _METHOD_OVERRIDES
     )
 
 

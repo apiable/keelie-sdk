@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { KeysUnavailable, SigningKeys, UnknownKey } from "../src/keys.js";
+import { KeysUnavailable, SigningKeys, UnknownKey, type Fetch } from "../src/keys.js";
+import { setLogger } from "../src/log.js";
 import { Clock, FakeIssuer, ISSUER, JWKS_URI, keyPair, listen } from "./support.js";
 
 const pair = await keyPair("key-1");
@@ -54,13 +55,104 @@ describe("SigningKeys", () => {
     assert.equal(keys.status(), "offline");
   });
 
-  it("caches nothing on a cold failure, so the next caller tries again", async () => {
+  it("keeps a cold failure for 5 seconds, then tries again", async () => {
+    const { issuer, clock, keys } = setup();
+    const lines: string[] = [];
+    setLogger({ debug() {}, info() {}, warn: (m) => lines.push(m) });
+    try {
+      issuer.down = true;
+      await assert.rejects(keys.key("key-1"), KeysUnavailable);
+      assert.equal(issuer.requests.length, 1);
+      issuer.down = false;
+      // Inside the window: refused at once, with the same log line, and the issuer is not asked.
+      clock.now += 4.9;
+      await assert.rejects(keys.key("key-1"), KeysUnavailable);
+      assert.equal(issuer.requests.length, 1);
+      assert.deepEqual(lines, ["apiable.keys_unavailable: TypeError", "apiable.keys_unavailable: TypeError"]);
+      // After the window: the next caller fetches again.
+      clock.now += 0.2;
+      await keys.key("key-1");
+      assert.equal(keys.status(), "connected");
+    } finally {
+      setLogger(undefined);
+    }
+  });
+
+  it("makes one fetch for every cold caller of a failing issuer, and each gets its failure", async () => {
     const { issuer, keys } = setup();
     issuer.down = true;
+    const results = await Promise.allSettled(Array.from({ length: 20 }, () => keys.key("key-1")));
+    assert.ok(results.every((r) => r.status === "rejected" && r.reason instanceof KeysUnavailable));
+    assert.deepEqual(issuer.requests, [DISCOVERY]);
+  });
+
+  it("ends a fetch that hangs at its deadline, with one fetch for every cold caller", async () => {
+    const requests: string[] = [];
+    // A fetch that never answers and does not read the signal.
+    const hang: Fetch = (input) => {
+      requests.push(input);
+      return new Promise<Response>(() => {});
+    };
+    const keys = new SigningKeys(ISSUER, { fetch: hang, timeoutSeconds: 0.2 });
+    const started = performance.now();
+    const results = await Promise.allSettled(Array.from({ length: 20 }, () => keys.key("key-1")));
+    const elapsed = performance.now() - started;
+    assert.ok(results.every((r) => r.status === "rejected" && r.reason instanceof KeysUnavailable));
+    assert.deepEqual(requests, [DISCOVERY]);
+    assert.ok(elapsed >= 150 && elapsed < 1000, `${elapsed} ms`);
+  });
+
+  it("ends a fetch whose body never ends at its deadline", async () => {
+    const stalled: Fetch = async () =>
+      new Response(new ReadableStream({ start() {} }), { headers: { "Content-Type": "application/json" } });
+    const keys = new SigningKeys(ISSUER, { fetch: stalled, timeoutSeconds: 0.1 });
     await assert.rejects(keys.key("key-1"), KeysUnavailable);
-    issuer.down = false;
+  });
+
+  it("counts a key set with no usable key as a failed fetch", async () => {
+    const { issuer, clock, keys } = setup();
     await keys.key("key-1");
+    issuer.keys = [];
+    clock.now += 60;
+    await assert.rejects(keys.key("key-2"), UnknownKey);
+    // The keys in hand stay, and go on verifying.
+    await keys.key("key-1");
+    assert.equal(keys.status(), "degraded");
+    // A set with a usable key still replaces the old set: a rotation retires the old key.
+    const next = await keyPair("key-2");
+    issuer.keys = [next.jwk];
+    clock.now += 60;
+    await keys.key("key-2");
+    clock.now += 60;
+    await assert.rejects(keys.key("key-1"), UnknownKey);
     assert.equal(keys.status(), "connected");
+  });
+
+  it("is unavailable on a cold start whose key set has no usable key", async () => {
+    const { issuer, keys } = setup();
+    issuer.keys = [];
+    await assert.rejects(keys.key("key-1"), KeysUnavailable);
+    assert.equal(keys.status(), "offline");
+  });
+
+  it("needs an https issuer, and plain http on a loopback host only", () => {
+    for (const bad of ["http://issuer.example.com/realms/a", "ftp://issuer.example.com", "issuer.example.com", "https://user@issuer.example.com"]) {
+      assert.throws(() => new SigningKeys(bad), TypeError, bad);
+    }
+    for (const good of ["https://issuer.example.com/realms/a", "http://localhost:8080/realms/a", "http://127.0.0.1/realms/a", "http://[::1]:8080/realms/a", "http://LOCALHOST:8080/realms/a"]) {
+      assert.doesNotThrow(() => new SigningKeys(good), good);
+    }
+  });
+
+  it("fetches no key set from a jwks_uri that is not https", async () => {
+    const requests: string[] = [];
+    const fetch: Fetch = async (input) => {
+      requests.push(input);
+      return Response.json({ issuer: ISSUER, jwks_uri: "http://issuer.example.com/certs" });
+    };
+    const keys = new SigningKeys(ISSUER, { fetch });
+    await assert.rejects(keys.key("key-1"), KeysUnavailable);
+    assert.deepEqual(requests, [DISCOVERY]);
   });
 
   it("goes on verifying with the keys in hand when a refresh fails", async () => {

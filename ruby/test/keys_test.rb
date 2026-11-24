@@ -58,12 +58,81 @@ class KeysTest < Minitest::Test
     @keys.key("key-1")
   end
 
-  def test_caches_nothing_on_a_cold_failure_so_the_next_caller_tries_again
+  def test_remembers_a_cold_failure_for_5_seconds_then_tries_again
     @issuer.down = true
-    capture_log { assert_raises(Keelie::KeysUnavailable) { @keys.key("key-1") } }
-    @issuer.down = false
+    capture_log do |lines|
+      assert_raises(Keelie::KeysUnavailable) { @keys.key("key-1") }
+      assert_equal [DISCOVERY], @issuer.requests
+      @issuer.down = false
+      @clock.now += 4.9
+      # Inside the window: refused at once, with the same log line, and the issuer is not asked.
+      assert_raises(Keelie::KeysUnavailable) { @keys.key("key-1") }
+      assert_equal [DISCOVERY], @issuer.requests
+      assert_equal ["apiable.keys_unavailable: Errno::ECONNREFUSED"] * 2, lines
+    end
+    assert_equal :offline, @keys.status
+    @clock.now += 0.1
     @keys.key("key-1")
+    assert_equal [DISCOVERY, DISCOVERY, JWKS_URI], @issuer.requests
     assert_equal :connected, @keys.status
+  end
+
+  def test_every_thread_that_waited_on_a_cold_fetch_that_failed_gets_its_failure
+    @issuer.down = true
+    @issuer.delay = 0.2
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    errors = capture_log do
+      Array.new(5) do
+        Thread.new do
+          @keys.key("key-1")
+        rescue Keelie::KeysUnavailable => e
+          e
+        end
+      end.map(&:value)
+    end
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    assert(errors.all?(Keelie::KeysUnavailable))
+    assert_equal [DISCOVERY], @issuer.requests
+    assert_operator elapsed, :<, 0.35, "the threads waited on more than one fetch"
+  end
+
+  def test_takes_a_key_set_with_no_usable_key_as_a_failed_fetch
+    # Cold: nothing to verify with, and the failure is remembered.
+    @issuer.keys = []
+    capture_log { assert_raises(Keelie::KeysUnavailable) { @keys.key("key-1") } }
+    assert_equal :offline, @keys.status
+    # Warm: the keys in hand stay, and go on verifying.
+    @issuer.keys = [@pair.jwk]
+    @clock.now += 5
+    @keys.key("key-1")
+    [[], [{ "kty" => "EC", "kid" => "ec" }]].each do |empty|
+      @issuer.keys = empty
+      @clock.now += 60
+      capture_log do |lines|
+        assert_raises(Keelie::UnknownKey) { @keys.key("key-2") }
+        assert_includes lines, "apiable.keys_not_refreshed: Keelie::SigningKeys::KeySetError"
+      end
+      assert @keys.key("key-1")
+      assert_equal :degraded, @keys.status
+    end
+  end
+
+  def test_needs_https_for_the_issuer_and_the_jwks_uri
+    ["http://issuer.example.com/realms/a", "ftp://issuer.example.com", "issuer.example.com", "", nil].each do |bad|
+      assert_raises(ArgumentError, bad.inspect) { Keelie::SigningKeys.new(bad, http: @issuer) }
+    end
+    ["http://localhost:8080/realms/a", "http://127.0.0.1/realms/a", "http://[::1]:8080/realms/a"].each do |local|
+      Keelie::SigningKeys.new(local, http: @issuer)
+    end
+    asked = []
+    issuer = FakeIssuer.new(@pair)
+    issuer.define_singleton_method(:call) do |_method, url, **|
+      asked << url
+      json(200, { "issuer" => ISSUER, "jwks_uri" => "http://issuer.example.com/certs", "keys" => [] })
+    end
+    keys = Keelie::SigningKeys.new(ISSUER, http: issuer, clock: @clock)
+    capture_log { assert_raises(Keelie::KeysUnavailable) { keys.key("key-1") } }
+    assert_equal [DISCOVERY], asked
   end
 
   def test_goes_on_verifying_with_the_keys_in_hand_when_a_refresh_fails

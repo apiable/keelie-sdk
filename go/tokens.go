@@ -131,10 +131,17 @@ type TokenVerifier struct {
 // in keelie: your own realm. audience is your API's resource in keelie,
 // exactly. orgID is your org id; a value that is not a UUID is an error. opts
 // may be nil.
+//
+// issuer must be https. Plain http is allowed only for localhost, 127.0.0.1
+// and [::1], for local development. Any other issuer is an error: the keys
+// that verify every token come from it.
 func NewTokenVerifier(issuer, audience, orgID string, opts *TokenVerifierOptions) (*TokenVerifier, error) {
 	org, ok := parseUUID(orgID)
 	if !ok {
 		return nil, fmt.Errorf("keelie: orgID is not a UUID: %q", orgID)
+	}
+	if err := secureURL("issuer", issuer); err != nil {
+		return nil, err
 	}
 	v := &TokenVerifier{issuer: issuer, audience: audience, orgID: org, leeway: Leeway.Seconds()}
 	if opts != nil {
@@ -153,6 +160,9 @@ func NewTokenVerifier(issuer, audience, orgID string, opts *TokenVerifierOptions
 
 // Audience is the aud every token must carry: your server's resource in keelie.
 func (v *TokenVerifier) Audience() string { return v.audience }
+
+// Issuer is the iss every token must carry: the issuer member of your org in keelie.
+func (v *TokenVerifier) Issuer() string { return v.issuer }
 
 // Status is what the SDK knows of the issuer, from its last fetch of the key set.
 //

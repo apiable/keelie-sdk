@@ -25,11 +25,14 @@ module Keelie
     # +keelie_url+ is the address of keelie (+KEELIE_URL+), +token_url+ the token
     # endpoint of keelie's issuer (+KEELIE_TOKEN_URL+), and +client_id+ and
     # +client_secret+ the +sdk_credential+ from the signup answer. +timeout_seconds+ is
-    # how long a call to keelie, or to the token endpoint, waits.
+    # how long one request to keelie, or to the token endpoint, may take in all.
+    #
+    # The secret goes to +token_url+, and the token to +keelie_url+. Both must be https,
+    # or plain http on a loopback host, or ArgumentError is raised.
     def initialize(keelie_url:, token_url:, client_id:, client_secret:, timeout_seconds: TIMEOUT_SECONDS,
                    http: nil, clock: nil)
-      @base = keelie_url.sub(%r{/+\z}, "")
-      @token_url = token_url
+      @base = HTTP.secure_url!("keelie_url", keelie_url).sub(%r{/+\z}, "")
+      @token_url = HTTP.secure_url!("token_url", token_url)
       @http = http || HTTP.for(timeout_seconds)
       @clock = clock || -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
       @form = URI.encode_www_form(grant_type: "client_credentials", client_id: client_id,

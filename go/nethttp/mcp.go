@@ -73,8 +73,10 @@ type MCPGuardOptions struct {
 //   - Every other method passes with no scope check: initialize,
 //     notifications/*, ping, tools/list, and also resources/* and prompts/*.
 //     Apiable sells tools, not resources or prompts.
-//   - GET, HEAD and DELETE pass, and so does a CORS preflight (OPTIONS). Every
-//     other method gets 405, with Allow: GET, POST, DELETE.
+//   - GET, HEAD and DELETE pass. Every other method gets 405, with
+//     Allow: GET, POST, DELETE. A CORS preflight passes before
+//     the token check, with no token, and your CORS middleware answers it.
+//     Any other OPTIONS request needs a token, then gets 405.
 //
 // Every refusal is a JSON-RPC error:
 //

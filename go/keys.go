@@ -10,8 +10,22 @@ package keelie
 // Once a key set is in hand, at most one fetch a minute, however many unknown
 // kid values arrive and whether or not the fetch succeeds. A flood of made-up
 // kid values costs the issuer one request a minute, also while the issuer is
-// down. With no key set in hand, a failed fetch caches nothing, and the next
-// caller tries again.
+// down.
+//
+// With no key set in hand (a cold start), every caller waits on one fetch, and
+// shares its outcome, a failure too. Each of the two requests (discovery, then
+// the key set) has a total deadline of [FetchTimeout], body included. A failed
+// cold fetch is kept for [ColdRetryInterval]: in that window every token is
+// refused at once, with no request to the issuer. The first token after it
+// fetches again.
+//
+// A key set with no usable signing key is a failed fetch. The keys in hand stay
+// and go on verifying. A set with at least one usable key replaces them, so a
+// rotation still retires the old key.
+//
+// The issuer and the jwks_uri must be https. Plain http is allowed only for
+// localhost, 127.0.0.1 and [::1]. Any other URL is a failed fetch, and no
+// request is sent to it.
 //
 // The jwks_uri from the first discovery is kept for the life of the process. A
 // discovery document whose issuer is not the configured one is refused, and no
@@ -44,8 +58,15 @@ const Algorithm = "RS256"
 // completed. Shorter than any token lifetime, so a rotation is never waited out.
 const RefreshInterval = 60 * time.Second
 
-// FetchTimeout is how long one request to the issuer may take.
+// FetchTimeout is how long one request to the issuer may take, in all: the
+// connection, the answer and its whole body.
 const FetchTimeout = 5 * time.Second
+
+// ColdRetryInterval is how long a failed fetch is kept when no key set is in
+// hand. In that window every token is refused at once, and the issuer is not
+// asked. A flood of tokens to a cold process costs the issuer one fetch in each
+// window, and no caller waits out a timeout that another caller just waited out.
+const ColdRetryInterval = 5 * time.Second
 
 // An RSA key under this size is skipped: it is too weak to trust.
 const minModulusBits = 2048
@@ -88,6 +109,7 @@ type SigningKeys struct {
 	client   *http.Client
 	clock    func() time.Time
 	interval time.Duration
+	timeout  time.Duration // FetchTimeout; shorter in a test
 
 	mu            sync.Mutex
 	keys          map[string]*rsa.PublicKey
@@ -95,6 +117,8 @@ type SigningKeys struct {
 	fetched       bool // a fetch has completed, so the cache is warm
 	fetchedAt     time.Time
 	refreshFailed bool
+	coldFailedAt  time.Time // when a cold fetch last failed; zero once one works
+	coldError     string    // the log word of that failure
 	inFlight      *refreshCall
 }
 
@@ -110,6 +134,7 @@ func NewSigningKeys(issuer string, opts *SigningKeysOptions) *SigningKeys {
 		issuer:   strings.TrimRight(issuer, "/"),
 		clock:    time.Now,
 		interval: RefreshInterval,
+		timeout:  FetchTimeout,
 		keys:     map[string]*rsa.PublicKey{},
 	}
 	if opts != nil {
@@ -144,6 +169,13 @@ func (k *SigningKeys) Key(ctx context.Context, kid string) (*rsa.PublicKey, erro
 			return nil, err
 		}
 		k.mu.Lock()
+	}
+	if k.coldFailing() {
+		// A cold fetch failed a moment ago: refuse at once, and do not ask again.
+		reason := k.coldError
+		k.mu.Unlock()
+		logx.Warn("apiable.keys_unavailable", "error", reason)
+		return nil, ErrKeysUnavailable
 	}
 	if k.keys[kid] == nil && k.mayFetch() {
 		call := &refreshCall{done: make(chan struct{})}
@@ -188,6 +220,11 @@ func (k *SigningKeys) Status() Status {
 	return StatusConnected
 }
 
+// coldFailing is true while a failed cold fetch is kept. Call it with mu held.
+func (k *SigningKeys) coldFailing() bool {
+	return !k.fetched && !k.coldFailedAt.IsZero() && k.clock().Sub(k.coldFailedAt) < ColdRetryInterval
+}
+
 func (k *SigningKeys) mayFetch() bool {
 	return !k.fetched || k.clock().Sub(k.fetchedAt) >= k.interval
 }
@@ -202,9 +239,11 @@ func (k *SigningKeys) refresh(call *refreshCall) {
 	}()
 	if err != nil {
 		if !k.fetched {
-			// Cold: nothing to verify with. Nothing is cached, so the next
-			// caller tries again.
-			logx.Warn("apiable.keys_unavailable", "error", errorName(err))
+			// Cold: nothing to verify with. The failure is kept for
+			// ColdRetryInterval, then the next caller tries again.
+			k.coldFailedAt = k.clock()
+			k.coldError = errorName(err)
+			logx.Warn("apiable.keys_unavailable", "error", k.coldError)
 			call.err = fmt.Errorf("%w: %w", ErrKeysUnavailable, err)
 			return
 		}
@@ -219,6 +258,7 @@ func (k *SigningKeys) refresh(call *refreshCall) {
 	k.fetched = true
 	k.fetchedAt = k.clock()
 	k.refreshFailed = false
+	k.coldFailedAt = time.Time{}
 	kids := make([]string, 0, len(keys))
 	for kid := range keys {
 		kids = append(kids, kid)
@@ -239,7 +279,12 @@ func (k *SigningKeys) fetchKeys() (keys map[string]*rsa.PublicKey, err error) {
 	if err != nil {
 		return nil, err
 	}
-	return signingKeys(keySet)
+	keys, err = signingKeys(keySet)
+	if err == nil && len(keys) == 0 {
+		// An empty set must not replace the keys in hand: it would refuse every token.
+		return nil, &fetchError{"no_keys"}
+	}
+	return keys, err
 }
 
 func (k *SigningKeys) fetchKeySet() (any, error) {
@@ -247,6 +292,9 @@ func (k *SigningKeys) fetchKeySet() (any, error) {
 	jwksURI := k.jwksURI
 	k.mu.Unlock()
 	if jwksURI == "" {
+		if secureURL("issuer", k.issuer) != nil {
+			return nil, &fetchError{"issuer_not_https"}
+		}
 		document, err := k.getJSON(k.issuer + "/.well-known/openid-configuration")
 		if err != nil {
 			return nil, err
@@ -266,6 +314,9 @@ func (k *SigningKeys) fetchKeySet() (any, error) {
 		if !ok {
 			return nil, &fetchError{"jwks_uri"}
 		}
+		if secureURL("jwks_uri", s) != nil {
+			return nil, &fetchError{"jwks_uri_not_https"}
+		}
 		jwksURI = s
 	}
 	document, err := k.getJSON(jwksURI)
@@ -283,7 +334,9 @@ func (k *SigningKeys) fetchKeySet() (any, error) {
 }
 
 func (k *SigningKeys) getJSON(url string) (any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), FetchTimeout)
+	// One deadline for the whole request, the body included: a per-read
+	// timeout would let an issuer that sends a byte at a time hold every caller.
+	ctx, cancel := context.WithTimeout(context.Background(), k.timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

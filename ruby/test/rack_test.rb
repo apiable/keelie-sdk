@@ -71,7 +71,39 @@ class RackTest < Minitest::Test
   def test_lets_paths_outside_resource_and_a_preflight_pass_untouched
     assert_equal 200, get("/health").status
     assert_equal 200, get("/v10/orders").status
-    assert_equal 200, get("/v1/orders/42", method: "OPTIONS").status
+    preflight = { "HTTP_ACCESS_CONTROL_REQUEST_METHOD" => "GET", "HTTP_ORIGIN" => "https://app.example.com" }
+    assert_equal 200, @request.request("OPTIONS", "/v1/orders/42", preflight).status
+  end
+
+  # A router can run an OPTIONS request that is not a preflight: Roda's r.is with no
+  # verb, Rails' match via: :all, a bare Rack app. It needs a token like any other.
+  def test_guards_an_options_request_that_is_not_a_preflight
+    ran = false
+    app = lambda do |env|
+      ran = true
+      ECHO.call(env)
+    end
+    request = Rack::MockRequest.new(Keelie::Rack::TokenGuard.new(app, verifier: @verifier, metadata: @metadata))
+    response = request.request("OPTIONS", "/v1/orders/42")
+    assert_equal [401, @metadata.challenge], [response.status, response["www-authenticate"]]
+    refute ran
+    # rack-cors hands an OPTIONS request with no Origin to the app: it is no preflight.
+    assert_equal 401, request.request("OPTIONS", "/v1/orders/42", "HTTP_ACCESS_CONTROL_REQUEST_METHOD" => "GET").status
+    refute ran
+    assert_equal 401, request.request("OPTIONS", "/v1/orders/42", "HTTP_ORIGIN" => "https://app.example.com").status
+    refute ran
+    %w[HTTP_X_HTTP_METHOD_OVERRIDE HTTP_X_HTTP_METHOD HTTP_X_METHOD_OVERRIDE].each do |header|
+      env = { "HTTP_ORIGIN" => "https://app.example.com", "HTTP_ACCESS_CONTROL_REQUEST_METHOD" => "GET",
+              header => "GET" }
+      assert_equal 401, request.request("OPTIONS", "/v1/orders/42", env).status, header
+      refute ran, header
+    end
+    preflight_headers = { "HTTP_ORIGIN" => "https://app.example.com", "HTTP_ACCESS_CONTROL_REQUEST_METHOD" => "GET" }
+    assert_equal 401, request.request("GET", "/v1/orders/42", preflight_headers).status
+    refute ran
+    ok = request.request("OPTIONS", "/v1/orders/42", "HTTP_AUTHORIZATION" => "Bearer #{sign(@pair)}")
+    assert_equal 200, ok.status
+    assert ran
   end
 
   def test_serves_the_ai_catalog_with_no_token_and_guards_any_other_method_on_it
@@ -101,6 +133,24 @@ class RackTest < Minitest::Test
   def test_does_not_start_when_the_verifiers_audience_is_not_the_resource
     verifier = Keelie::TokenVerifier.new(ISSUER, "https://api.example.com/v2", ORG_ID)
     assert_raises(ArgumentError) { Keelie::Rack::TokenGuard.new(ECHO, verifier: verifier, metadata: @metadata) }
+  end
+
+  def test_does_not_start_when_the_verifiers_issuer_is_not_the_authorization_server
+    ["https://issuer.example.com/realms/other", "#{ISSUER}/", "http://localhost/realms/portal-labs"].each do |other|
+      verifier = Keelie::TokenVerifier.new(other, RESOURCE, ORG_ID)
+      error = assert_raises(ArgumentError, other) do
+        Keelie::Rack::TokenGuard.new(ECHO, verifier: verifier, metadata: @metadata)
+      end
+      assert_match(/authorization server/, error.message)
+    end
+  end
+
+  def test_starts_with_a_loopback_http_issuer_for_local_development
+    local = "http://localhost:8080/realms/portal-labs"
+    verifier = Keelie::TokenVerifier.new(local, RESOURCE, ORG_ID)
+    metadata = Keelie::ProtectedResourceMetadata.new(RESOURCE, local)
+    assert_equal local, JSON.parse(metadata.document)["authorization_servers"].first
+    Keelie::Rack::TokenGuard.new(ECHO, verifier: verifier, metadata: metadata)
   end
 
   def test_compares_every_form_of_a_path_a_router_could_route_by

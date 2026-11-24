@@ -92,7 +92,7 @@ func TestACatalogClientThatPanicsOrAnswersNothingIsA503(t *testing.T) {
 	}
 }
 
-func TestAKeySetClientThatPanicsIsACachedNothingFailure(t *testing.T) {
+func TestAKeySetClientThatPanicsIsAColdFailure(t *testing.T) {
 	lines := captureLog(t)
 	issuer := tk.NewFakeIssuer(tk.NewKeyPair("key-1", 0))
 	var panicked atomic.Bool
@@ -102,11 +102,14 @@ func TestAKeySetClientThatPanicsIsACachedNothingFailure(t *testing.T) {
 		}
 		return issuer.RoundTrip(r)
 	})}
-	keys := NewSigningKeys(tk.Issuer, &SigningKeysOptions{HTTPClient: client, Clock: tk.NewClock().Now})
+	clock := tk.NewClock()
+	keys := NewSigningKeys(tk.Issuer, &SigningKeysOptions{HTTPClient: client, Clock: clock.Now})
 	keyFails(t, keys, "key-1", ErrKeysUnavailable)
 	if !lines.Has("apiable.keys_unavailable error=client_panic") {
 		t.Fatalf("lines %q", lines.All())
 	}
+	// Kept like any cold failure, then tried again.
+	clock.Advance(ColdRetryInterval)
 	mustKey(t, keys, "key-1")
 }
 

@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import type { KeelieFetch } from "../src/credential.js";
 import { setLogger } from "../src/log.js";
-import { KEELIE_OUTCOME_NAMESPACE, UsageReporter, formatAmount } from "../src/usage.js";
+import { KEELIE_OUTCOME_NAMESPACE, MAX_REFUSED_SENDS, UsageReporter, formatAmount } from "../src/usage.js";
 import { parseUuid, uuid5 } from "../src/uuid.js";
 import { CONSUMER, until } from "./support.js";
 
@@ -238,13 +238,93 @@ describe("UsageReporter", () => {
     assert.equal(sent.length, 1);
   });
 
-  it("gives up on close after the timeout, and counts what is lost", async () => {
+  it("gives up on close after the timeout, and does not call a batch on its way lost", async () => {
     const lines = captureLog();
     const never: KeelieFetch = () => new Promise(() => {});
     const reporter = new UsageReporter(never, { flushIntervalSeconds: 60 });
     reporter.record("client", "GET /a");
     await reporter.close(0.05);
-    assert.ok(lines.includes("apiable.usage_dropped events=1 reason=closed"));
+    assert.ok(lines.includes("apiable.usage_unconfirmed events=1 reason=closed"), lines.join("\n"));
+    assert.ok(!lines.some((line) => line.startsWith("apiable.usage_dropped")), lines.join("\n"));
+    setLogger(undefined);
+  });
+
+  it("never sends a batch twice at once when a flush outlasts the close timeout", async () => {
+    for (const outcome of ["sent", "failed"] as const) {
+      const lines = captureLog();
+      const sent: string[] = [];
+      let answer: (response: Response) => void = () => {};
+      let fail: (error: Error) => void = () => {};
+      const slow: KeelieFetch = (_path, init) => {
+        sent.push(new Headers(init?.headers).get("Idempotency-Key") ?? "");
+        return new Promise<Response>((resolve, reject) => {
+          answer = resolve;
+          fail = reject;
+        });
+      };
+      const reporter = new UsageReporter(slow, { batchSize: 1, flushIntervalSeconds: 0.01 });
+      reporter.record("client", "GET /a");
+      await until(() => sent.length === 1); // on its way, and keelie does not answer yet
+      reporter.record("client", "GET /b"); // waits behind it
+      await reporter.close(0.05);
+      assert.equal(sent.length, 1, outcome);
+      assert.ok(lines.includes("apiable.usage_unconfirmed events=1 reason=closed"), outcome);
+      assert.ok(lines.includes("apiable.usage_dropped events=1 reason=closed"), outcome); // GET /b
+      lines.length = 0;
+      if (outcome === "sent") answer(Response.json({}, { status: 202 }));
+      else fail(new TypeError("fetch failed"));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      // GET /b was counted as lost, so it is not sent after all.
+      assert.equal(sent.length, 1, outcome);
+      const dropped = lines.filter((line) => line.startsWith("apiable.usage_dropped"));
+      assert.deepEqual(dropped, outcome === "sent" ? [] : ["apiable.usage_dropped events=1 reason=closed"]);
+    }
+    setLogger(undefined);
+  });
+
+  it("counts an event recorded after close began as dropped", async () => {
+    const lines = captureLog();
+    const { keelie, sent } = fakeKeelie();
+    const reporter = new UsageReporter(keelie, { flushIntervalSeconds: 60 });
+    reporter.record("client", "GET /a");
+    const closing = reporter.close();
+    // While close() runs: counted in its one log line.
+    reporter.record("client", "GET /late-1");
+    reporter.record("client", "GET /late-2");
+    await closing;
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]!.events.length, 1);
+    assert.deepEqual(lines, ["apiable.usage_dropped events=2 reason=closed"]);
+    // After close() returned: a line of its own.
+    reporter.record("client", "GET /later");
+    assert.deepEqual(lines.slice(1), ["apiable.usage_dropped events=1 reason=closed"]);
+    setLogger(undefined);
+  });
+
+  it("drops a batch keelie answers with 401 or 409 five times, and retries a 5xx on", async () => {
+    for (const status of [401, 409] as const) {
+      const { keelie, sent, answers } = fakeKeelie();
+      const lines = captureLog();
+      answers.push(...Array.from({ length: 20 }, () => status));
+      const reporter = new UsageReporter(keelie, { batchSize: 1, flushIntervalSeconds: 0.01 });
+      reporter.record("client", "GET /a");
+      await until(() => lines.includes(`apiable.usage_dropped events=1 reason=refused status=${status}`));
+      assert.equal(sent.length, MAX_REFUSED_SENDS, String(status));
+      assert.equal(new Set(sent.map((s) => s.key)).size, 1);
+      // The next batch is sent as usual.
+      answers.length = 0;
+      reporter.record("client", "GET /b");
+      await until(() => sent.length === MAX_REFUSED_SENDS + 1);
+      assert.equal(sent.at(-1)!.events[0]!["capability_key"], "GET /b");
+      await reporter.close();
+    }
+    const { keelie, sent, answers } = fakeKeelie();
+    answers.push(...Array.from({ length: 8 }, () => 503));
+    const reporter = new UsageReporter(keelie, { batchSize: 1, flushIntervalSeconds: 0.01 });
+    reporter.record("client", "GET /a");
+    await until(() => sent.length === 9);
+    assert.equal(new Set(sent.map((s) => s.key)).size, 1);
+    await reporter.close();
     setLogger(undefined);
   });
 

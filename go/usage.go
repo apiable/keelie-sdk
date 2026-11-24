@@ -29,6 +29,10 @@ package keelie
 //
 //   - A network error, a 401, 408, 409, 429 or a 5xx keeps the batch. The
 //     reporter sends it again after one interval. It does not read Retry-After.
+//   - A batch that keelie answers with 401 or 409 is sent [MaxRefusedSends]
+//     times in all. Then it is dropped, with a log line that counts its events.
+//     A credential that keelie refuses, or a key that keelie holds for another
+//     body, gets the same answer each time.
 //   - Any other answer drops the batch, with a log line. A retry gets the same
 //     answer. usage-out-of-range is one of these: the batch would take a
 //     counter or a balance past the largest value keelie keeps.
@@ -86,6 +90,10 @@ const (
 	defaultCloseWindow = 10 * time.Second
 )
 
+// MaxRefusedSends is how many times a batch is sent while keelie answers it
+// with 401 or 409. Then the batch is dropped.
+const MaxRefusedSends = 5
+
 // FlushInterval is at most 5 seconds. A Consumer's balance may go below zero
 // for 60 seconds at most, and that window must hold one flush, one failed
 // flush, a retry and a burst.
@@ -139,9 +147,10 @@ type UsageReporterOptions struct {
 }
 
 type batch struct {
-	key   string
-	body  []byte
-	count int
+	key     string
+	body    []byte
+	count   int
+	refused int // the sends keelie answered with 401 or 409
 }
 
 // UsageReporter collects usage events and sends them to keelie in batches, in
@@ -452,7 +461,17 @@ func (r *UsageReporter) send(ctx context.Context, b *batch) bool {
 		logx.Debug("apiable.usage_sent", "events", b.count)
 		return true
 	}
-	if status == 401 || status == 408 || status == 409 || status == 429 || status >= 500 {
+	if status == 401 || status == 409 {
+		drain(resp.Body)
+		b.refused++
+		if b.refused >= MaxRefusedSends {
+			logx.Warn("apiable.usage_dropped", "events", b.count, "reason", "refused", "status", status)
+			return true
+		}
+		logx.Warn("apiable.usage_not_sent", "events", b.count, "status", status)
+		return false
+	}
+	if status == 408 || status == 429 || status >= 500 {
 		drain(resp.Body)
 		logx.Warn("apiable.usage_not_sent", "events", b.count, "status", status)
 		return false

@@ -22,6 +22,11 @@ its arguments, its return value and its errors. To start, read the [quickstart](
 
 The [quickstart](quickstart.md) shows each step with code.
 
+> **Warning:** the guards check only the paths under your `resource`. Your app must see the same
+> path as the public `resource`. A proxy or a gateway that strips the prefix, such as `/v1`, leaves
+> every route unguarded. Mount the guard where the path that the app receives starts with the path
+> of `resource`.
+
 ### Servers with many workers
 
 Each worker process holds its own key set and its own usage buffer. That is correct: the SDK
@@ -33,6 +38,13 @@ worker, so the code in the quickstart is already correct.
 
 Call `await reporter.aclose()` in the lifespan, after `yield`. It sends the events that wait in
 memory, once, for at most 10 seconds. Events it cannot send in that time are lost, with a log line.
+
+### Serverless platforms
+
+On AWS Lambda with Mangum, or on another serverless platform, the platform can freeze or end the
+process after each invocation. The SDK has no disk buffer. Await `reporter.aclose()` before the
+invocation ends, or the events in memory are lost. Make sure that the lifespan shutdown runs, or
+call `aclose()` yourself at the end of the handler.
 
 ## Supported features
 
@@ -68,11 +80,13 @@ TokenVerifier(
 
 | Argument | Value |
 |---|---|
-| `issuer` | The `issuer` of your org in keelie: your own realm. |
+| `issuer` | The `issuer` of your org in keelie: your own realm. It must be `https`, with no user in the URL. Plain `http` is allowed only on a loopback host (`localhost`, `127.0.0.1`, `[::1]`, in any case), for local development. |
 | `audience` | The address of your API, as you registered it with keelie. Give the same value to `ProtectedResourceMetadata`. |
 | `org_id` | The `id` of your org in keelie. A token of another Provider carries another `org_id`. |
 | `keys` | The key set. Leave it out in production. Give one in tests (see [Test with no network](#test-with-no-network)). |
 | `leeway_seconds` | The clock skew a token is forgiven. |
+
+**Raises** `ValueError` when `issuer` is not `https` and not `http` on a loopback host.
 
 ### `await verifier.verify(token: str) -> Claims`
 
@@ -109,6 +123,19 @@ valid token.
 
 To see how long a Consumer keeps working while keelie is down, read `claims.expires_at`. Each
 token has its own lifetime, so the time left belongs to the token, not to the process.
+
+### The key set
+
+- **Cold start.** With no key set in hand, all callers wait on one shared fetch. They all get its
+  result, a failure too. After a failed fetch, the SDK waits 5 seconds before it asks the issuer
+  again. A token in that window is refused at once, with `keys_unavailable`.
+- **Deadline.** Each request to the issuer has a total deadline of 5 seconds.
+- **An empty key set.** A fetch that brings no usable signing key, such as `{"keys": []}`, is a
+  failed fetch. The keys in hand stay and go on verifying. The status becomes `degraded`.
+- **Rotation.** A key set with a usable key replaces the old set. So a rotation retires the old
+  keys.
+- **https.** The `jwks_uri` in the issuer's discovery document must be `https`, or `http` on a
+  loopback host. Otherwise the SDK fetches no key from it.
 
 ### `Claims`
 
@@ -182,12 +209,23 @@ app.add_middleware(TokenGuard, verifier=verifier, metadata=metadata)
 | No Bearer token | `401`, `WWW-Authenticate: Bearer resource_metadata="..."` |
 | A token that does not verify | `401`, `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="..."`, an empty body. The same answer for every reason. |
 | A token that verifies | Your route runs. |
-| A path outside your address, a CORS preflight (`OPTIONS`), a WebSocket | Your app, untouched. |
+| A path outside your address, a CORS preflight, a WebSocket | Your app, untouched. |
+| Any other `OPTIONS` | Guarded like any other method. A token is needed. |
+
+A CORS preflight is an `OPTIONS` request with two headers: `Origin` and
+`Access-Control-Request-Method`. It carries none of the headers `X-HTTP-Method-Override`,
+`X-HTTP-Method` or `X-Method-Override`. Only a preflight passes with no token. Your CORS
+middleware must answer it. A route that accepts `OPTIONS` runs only with a token that verifies.
 
 `TokenGuard` does not check the scope. Middleware runs before the router, so it cannot see the
 route template. Call `ScopeMap.check` in each route.
 
-The verifier's `audience` must be the `resource` of the metadata.
+The verifier's `audience` must be the `resource` of the metadata. The verifier's `issuer` must be
+the `authorization_server` of the metadata. Otherwise the guard does not start: it raises
+`ValueError`.
+
+The guard checks only paths under `resource`. A proxy that strips the prefix leaves every route
+unguarded. See the warning in [Get started](#get-started).
 
 ---
 
@@ -227,10 +265,15 @@ not in the map is refused. Give the MCP endpoint itself as the `resource` of the
 | A batch, a key given twice, a `tools/call` with no `id` | `400`, `-32600` |
 | A `tools/call` whose `params.name` is not a string | `400`, `-32602` |
 | A body larger than `max_body_bytes` | `413`, `-32600` |
-| `GET`, `HEAD`, `DELETE`, a CORS preflight (`OPTIONS`) | Your server. |
-| Any other method | `405`, `Allow: GET, POST, DELETE` |
+| `GET`, `HEAD`, `DELETE` | Your server. |
+| A CORS preflight, as for `TokenGuard` | Your server, with no token. |
+| Any other method, any other `OPTIONS` included | `405`, `Allow: GET, POST, DELETE`, after the token check. |
 
 Token refusals are the same as for `TokenGuard`.
+
+> **Warning:** `McpGuard` counts a tool call when your server starts an HTTP `2xx` answer. It does
+> not read the answer. A JSON-RPC error or an `isError` result inside an HTTP `200` is counted as
+> usage. Answer a failed tool call with an HTTP error status if it must not count.
 
 ---
 
@@ -251,7 +294,7 @@ ProtectedResourceMetadata(
 | Argument | Value |
 |---|---|
 | `resource` | The address of your API, exactly as a client calls it. `https`, no query, no fragment, no final slash. |
-| `authorization_server` | Your `issuer`, the same value you give `TokenVerifier`. |
+| `authorization_server` | Your `issuer`, the same value you give `TokenVerifier`. `https`, or `http` on a loopback host for local development. |
 | `scopes_supported` | The scopes to publish. Left out, the metadata names none. |
 
 **Raises** `ValueError` for an address that breaks those rules, or a scope list that is one string.
@@ -409,6 +452,7 @@ with a log line.
 |---|---|
 | `2xx` | Done. |
 | A network error, `401`, `408`, `409`, `429`, `5xx` | Keeps the batch, and sends it again after one interval, with the same `Idempotency-Key` and the same body. keelie keeps each event once. |
+| `401` or `409` for the fifth time on one batch | Drops the batch, with `apiable.usage_dropped events=<n> reason=refused`. |
 | Any other answer | Drops the batch, with a log line. A retry gets the same answer. |
 
 keelie refuses an event older than the start of the previous month.
@@ -425,14 +469,14 @@ token or a secret.
 | `apiable.token_rejected reason=...` | INFO | A token did not verify. |
 | `apiable.scope_refused` | INFO | A token did not carry the scope of a route. |
 | `apiable.keys_loaded` | INFO | The SDK fetched the issuer's key set. |
-| `apiable.keys_unavailable` | WARNING | The SDK holds no key set and could not fetch one. Every token is refused. |
-| `apiable.keys_not_refreshed` | WARNING | A fetch failed. The keys in hand go on verifying. |
+| `apiable.keys_unavailable` | WARNING | The SDK holds no key set and could not fetch one. Every token is refused. For 5 seconds after the failure, the SDK does not ask the issuer again. |
+| `apiable.keys_not_refreshed` | WARNING | A fetch failed, or brought no usable signing key. The keys in hand go on verifying. |
 | `apiable.key_skipped` | WARNING | The SDK could not load one key of the set. The rest of the set loads. Only a key's public part is read, so a key published with its private part still loads. |
 | `apiable.mcp_refused` | INFO | `McpGuard` refused a request. |
 | `apiable.usage_event_invalid reason=...` | WARNING | `record()` left out an event that keelie would refuse. |
 | `apiable.usage_not_sent` | WARNING | A batch failed and waits for a retry. |
 | `apiable.usage_flush_failed` | WARNING | The background task met an error. It sends again after one interval. |
-| `apiable.usage_dropped` | WARNING | Events were lost: refused by keelie, buffer full, or not sent at shutdown. |
+| `apiable.usage_dropped` | WARNING | Events were lost: refused by keelie (`reason=refused` after five `401` or `409` answers), buffer full, or not sent at shutdown. |
 | `apiable.catalog_fetch_failed` | WARNING | The SDK could not fetch the catalog. |
 
 ---

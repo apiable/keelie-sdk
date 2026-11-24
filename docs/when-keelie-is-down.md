@@ -33,7 +33,15 @@ the token lifetime and the 5-second report interval.
 | The SDK holds | What happens |
 |---|---|
 | The key set, from an earlier token | The keys in hand go on verifying. A valid token passes. The SDK does not ask the issuer, unless a token names a key it does not know. |
-| No key set: the process started during the outage | Every token is refused with `401`, even a valid one. The log says `apiable.keys_unavailable`. The next request tries the issuer again. |
+| No key set: the process started during the outage | Every token is refused with `401`, even a valid one. The log says `apiable.keys_unavailable`. See below. |
+
+With no key set, one fetch runs at a time. Requests that arrive during it wait for that fetch and
+share its result. Each request to the issuer stops after 5 seconds in all. When the fetch fails, the
+SDK remembers the failure for 5 seconds. Requests in that time are refused at once, and do not call
+the issuer. The first request after it tries the issuer again.
+
+A fetch that gets an empty key set counts as a failed fetch. The keys in hand stay. A key set with
+at least one usable key replaces the old one, so a retired key stops working.
 
 > **Caution:** a copy of your application that starts during an outage refuses every call until
 > the issuer is back. Do not restart or scale out all copies at once while keelie is down.
@@ -53,6 +61,9 @@ Nothing on the request path changes. Only the background work waits.
 - **Usage reports.** The SDK keeps each failed batch in memory, and sends it again every 5 seconds
   with the same idempotency key. keelie keeps each event once. The buffer holds 10,000 events.
   When it is full, the oldest event goes, with the log line `apiable.usage_dropped`.
+- **A batch that keelie refuses with `401` or `409`.** The SDK sends it 5 times in all. Then it
+  drops the batch with the log line `apiable.usage_dropped reason=refused`, so later batches are
+  not blocked. A revoked or wrong SDK credential causes this. Check the credential.
 - **The AI Catalog.** The SDK serves its copy for 60 seconds at most. After that, both catalog
   paths answer `503` with `Retry-After: 10`, until keelie answers again.
 
@@ -74,6 +85,10 @@ error for you.
 
 The answer is `401`, with `WWW-Authenticate: Bearer resource_metadata="..."`. An agent follows that
 address to your metadata, and from there to your issuer, to get a token.
+
+An `OPTIONS` request needs a token too, unless it is a CORS preflight. A preflight has an `Origin`
+header and an `Access-Control-Request-Method` header. It has no method-override header, such as
+`X-HTTP-Method-Override`. The guard passes a preflight untouched. Your CORS middleware answers it.
 
 ## keelie refuses a usage event
 

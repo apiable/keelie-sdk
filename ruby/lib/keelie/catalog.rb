@@ -13,7 +13,9 @@ module Keelie
   # The SDK does not change the document. It keeps no copy past 60 seconds: if keelie
   # does not answer when the copy is old, the answer is 503, not an old catalog. After
   # a failure, it asks keelie again after 10 seconds, not on each request. One fetch
-  # serves every request that arrives while it runs.
+  # serves every request that arrives while it runs: each waits for it and gets its
+  # outcome, a failure too. A fetch waits as long as the {SdkCredential}'s timeout
+  # for each request it makes.
   #
   # Serve it with the Rack middleware {Rack::AiCatalog}, or call {#answer} from any
   # other server.
@@ -35,6 +37,9 @@ module Keelie
       @body = nil
       @fetched_at = 0.0
       @failed_at = nil
+      # The count of fetches that have ended. A request that waited while one ended
+      # takes its outcome, and does not fetch again.
+      @fetches = 0
       @lock = Mutex.new
     end
 
@@ -59,27 +64,37 @@ module Keelie
     def catalog
       return @body if settled?
 
+      fetches = @fetches
       @lock.synchronize do
         # One fetch for many requests at once: the others read what it got, or its failure.
-        return @body if settled?
+        return @body if @fetches != fetches || settled?
 
-        @body = nil
         begin
-          response = @keelie.call("GET", KEELIE_PATH)
-        rescue StandardError => e
-          Log.warn("apiable.catalog_fetch_failed error=#{e.class.name}")
-          @failed_at = @clock.call
-          return nil
+          fetch
+        ensure
+          @fetches += 1
         end
-        if response.status != 200
-          Log.warn("apiable.catalog_fetch_failed status=#{response.status}")
-          @failed_at = @clock.call
-          return nil
-        end
-        @fetched_at = @clock.call
-        @failed_at = nil
-        @body = response.body.b.freeze
       end
+    end
+
+    # Fetch the catalog from keelie. The body, or nil if keelie fails.
+    def fetch
+      @body = nil
+      begin
+        response = @keelie.call("GET", KEELIE_PATH)
+      rescue StandardError => e
+        Log.warn("apiable.catalog_fetch_failed error=#{e.class.name}")
+        @failed_at = @clock.call
+        return nil
+      end
+      if response.status != 200
+        Log.warn("apiable.catalog_fetch_failed status=#{response.status}")
+        @failed_at = @clock.call
+        return nil
+      end
+      @fetched_at = @clock.call
+      @failed_at = nil
+      @body = response.body.b.freeze
     end
 
     # True while the copy is fresh, or while a failure is recent: no fetch is due.

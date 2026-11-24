@@ -13,9 +13,13 @@
  * No request that carries the secret or the token follows a redirect. A `307`
  * or `308` would send the same body, and so the secret, to wherever it points.
  * A redirect fails the request instead, as a network error does.
+ *
+ * `keelieUrl` and `tokenUrl` must be https: the secret and the token go there.
+ * Plain http is taken only for a loopback host, for local development.
  */
 
-import { FETCH_TIMEOUT_SECONDS, type Fetch } from "./keys.js";
+import { requireHttps } from "./discovery.js";
+import type { Fetch } from "./keys.js";
 
 /**
  * Sends one request to keelie. `path` is keelie's path, such as
@@ -39,7 +43,8 @@ export interface SdkCredentialOptions {
 
 /** A {@link KeelieFetch} that sends a token of your SDK credential with each request. */
 export function sdkCredential(options: SdkCredentialOptions): KeelieFetch {
-  const base = options.keelieUrl.replace(/\/+$/, "");
+  const base = requireHttps("keelieUrl", options.keelieUrl).replace(/\/+$/, "");
+  const tokenUrl = requireHttps("tokenUrl", options.tokenUrl);
   const timeout = (options.timeoutSeconds ?? 10) * 1000;
   const send: Fetch = options.fetch ?? ((input, init) => fetch(input, init));
   const form = new URLSearchParams({
@@ -52,7 +57,7 @@ export function sdkCredential(options: SdkCredentialOptions): KeelieFetch {
   let minting: Promise<void> | null = null;
 
   async function mint(): Promise<void> {
-    const response = await send(options.tokenUrl, {
+    const response = await send(tokenUrl, {
       method: "POST",
       body: form,
       headers: { "Content-Type": "application/x-www-form-urlencoded" },

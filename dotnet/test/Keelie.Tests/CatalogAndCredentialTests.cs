@@ -429,6 +429,53 @@ public sealed class SdkCredentialTests
     {
     }
 
+    [Theory]
+    [InlineData("http://keelie.example.test", "https://issuer.example.test/token", "KeelieUrl")]
+    [InlineData("https://keelie.example.test", "http://issuer.example.test/token", "TokenUrl")]
+    [InlineData("https://keelie.example.test", "http://10.0.0.1/token", "TokenUrl")]
+    [InlineData("keelie.example.test", "https://issuer.example.test/token", "KeelieUrl")]
+    [InlineData("https://user@keelie.example.test", "https://issuer.example.test/token", "KeelieUrl")]
+    [InlineData("https://keelie.example.test", "https://user:pw@issuer.example.test/token", "TokenUrl")]
+    public void The_secret_goes_over_https_only(string keelieUrl, string tokenUrl, string refused)
+    {
+        var options = new SdkCredentialOptions { KeelieUrl = keelieUrl, TokenUrl = tokenUrl, ClientId = "sdk", ClientSecret = "s3cret" };
+
+        var error = Assert.Throws<ArgumentException>(() => SdkCredential.CreateClient(options));
+
+        Assert.Equal(refused, error.ParamName);
+        Assert.DoesNotContain("s3cret", error.Message, StringComparison.Ordinal);
+        if (refused == "TokenUrl")
+        {
+            Assert.Throws<ArgumentException>(() => new SdkCredential(options));
+        }
+    }
+
+    [Fact]
+    public async Task The_token_goes_over_https_only()
+    {
+        var endpoints = new Endpoints();
+        using var keelie = Client(endpoints);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => keelie.GetAsync(new Uri("http://keelie.example.test/ai-catalog")));
+
+        Assert.Equal(0, endpoints.Minted);
+        Assert.Empty(endpoints.Calls);
+    }
+
+    [Fact]
+    public void Create_client_takes_http_to_a_loopback_host()
+    {
+        using var client = SdkCredential.CreateClient(new SdkCredentialOptions
+        {
+            KeelieUrl = "http://LOCALHOST:8000",
+            TokenUrl = "http://127.0.0.1:8080/realms/test/protocol/openid-connect/token",
+            ClientId = "sdk",
+            ClientSecret = "s3cret",
+        });
+
+        Assert.Equal(new Uri("http://localhost:8000"), client.BaseAddress);
+    }
+
     [Fact]
     public void Create_client_sets_the_address_and_the_timeout()
     {

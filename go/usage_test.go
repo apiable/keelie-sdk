@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -158,6 +159,49 @@ func TestAFailedBatchIsSentAgainWithTheSameKeyAndTheSameBody(t *testing.T) {
 		sent := keelie.batches()
 		if sent[0].key != sent[1].key || sent[0].body != sent[1].body {
 			t.Fatalf("%d: %v", failure, sent)
+		}
+		r.Close(context.Background())
+	}
+}
+
+func TestABatchKeelieAnswersWith401Or409IsSentFiveTimesThenDropped(t *testing.T) {
+	for _, status := range []int{401, 409} {
+		lines := captureLog(t)
+		keelie := &fakeKeelie{answers: slices.Repeat([]int{status}, 10)}
+		r := newReporter(t, keelie, &UsageReporterOptions{BatchSize: 2, FlushInterval: 10 * time.Millisecond})
+		r.Record(Event{ClientID: "client-a", CapabilityKey: "GET /a"})
+		r.Record(Event{ClientID: "client-a", CapabilityKey: "GET /a"})
+		want := "apiable.usage_dropped events=2 reason=refused status=" + strconv.Itoa(status)
+		until(t, func() bool { return lines.Has(want) })
+		sent := keelie.batches()
+		if len(sent) != MaxRefusedSends {
+			t.Fatalf("%d: sent %d times", status, len(sent))
+		}
+		for _, b := range sent {
+			if b.key != sent[0].key || b.body != sent[0].body {
+				t.Fatalf("%d: a retry changed the batch", status)
+			}
+		}
+		// The next batch is new, and sent.
+		r.Record(Event{ClientID: "client-a", CapabilityKey: "GET /b"})
+		r.Record(Event{ClientID: "client-a", CapabilityKey: "GET /b"})
+		until(t, func() bool { return keelie.count() == MaxRefusedSends+1 })
+		if got := keelie.batches()[MaxRefusedSends]; got.key == sent[0].key || got.events[0]["capability_key"] != "GET /b" {
+			t.Fatalf("%d: %v", status, got)
+		}
+		r.Close(context.Background())
+	}
+}
+
+func TestABatchThatFailsWith5xxOrTheNetworkIsNotDroppedAfterFiveSends(t *testing.T) {
+	for _, failure := range []int{500, 0} {
+		keelie := &fakeKeelie{answers: slices.Repeat([]int{failure}, MaxRefusedSends+2)}
+		r := newReporter(t, keelie, &UsageReporterOptions{BatchSize: 1, FlushInterval: 5 * time.Millisecond})
+		r.Record(Event{ClientID: "client-a", CapabilityKey: "GET /a"})
+		until(t, func() bool { return keelie.count() == MaxRefusedSends+3 })
+		sent := keelie.batches()
+		if sent[len(sent)-1].key != sent[0].key {
+			t.Fatalf("%d: the batch was dropped", failure)
 		}
 		r.Close(context.Background())
 	}

@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -120,6 +121,32 @@ func httpsURL(name, value string) (netloc, path string, err error) {
 	return netloc, path, nil
 }
 
+// secureURL checks that value is an https URL with a host. Plain http is
+// allowed only for a loopback host (localhost, 127.0.0.1 or [::1]), for local
+// development. A URL with a user is refused. It is the rule for every URL the
+// SDK fetches keys from or sends a secret to: the issuer (also as the
+// authorization server of the metadata), the jwks_uri, the token endpoint and
+// keelie.
+func secureURL(name, value string) error {
+	u, err := url.Parse(value)
+	if err != nil || u.Host == "" || u.Opaque != "" {
+		return fmt.Errorf("keelie: %s is not a URL with a host: %q", name, value)
+	}
+	if u.User != nil {
+		return fmt.Errorf("keelie: %s must have no user: %q", name, value)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		switch strings.ToLower(u.Hostname()) {
+		case "localhost", "127.0.0.1", "::1":
+			return nil
+		}
+	}
+	return fmt.Errorf("keelie: %s must be https (plain http only for localhost, 127.0.0.1 or [::1]): %q", name, value)
+}
+
 // ProtectedResourceMetadataOptions are the options of
 // [NewProtectedResourceMetadata]. The zero value is the default.
 type ProtectedResourceMetadataOptions struct {
@@ -131,6 +158,7 @@ type ProtectedResourceMetadataOptions struct {
 // challenge that points to it.
 type ProtectedResourceMetadata struct {
 	resource  string
+	issuer    string
 	prefix    string
 	path      string
 	url       string
@@ -143,16 +171,17 @@ type ProtectedResourceMetadata struct {
 // query, fragment or final slash. The metadata repeats it as it is.
 // authorizationServer is the issuer, the same value you give
 // [NewTokenVerifier]. It is one issuer: an agent uses the first and does not
-// try a second. opts may be nil.
+// try a second. It must be https; plain http is allowed only for localhost,
+// 127.0.0.1 and [::1], as for the verifier. opts may be nil.
 func NewProtectedResourceMetadata(resource, authorizationServer string, opts *ProtectedResourceMetadataOptions) (*ProtectedResourceMetadata, error) {
 	netloc, path, err := httpsURL("resource", resource)
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err := httpsURL("authorizationServer", authorizationServer); err != nil {
+	if err := secureURL("authorizationServer", authorizationServer); err != nil {
 		return nil, err
 	}
-	m := &ProtectedResourceMetadata{resource: resource}
+	m := &ProtectedResourceMetadata{resource: resource, issuer: authorizationServer}
 	// The well-known name goes between the host and the path (RFC 9728 section 3.1).
 	m.prefix = strings.TrimRight(path, "/")
 	m.path = WellKnown + m.prefix
@@ -185,6 +214,9 @@ func NewProtectedResourceMetadata(resource, authorizationServer string, opts *Pr
 
 // Resource is the resource, as given.
 func (m *ProtectedResourceMetadata) Resource() string { return m.resource }
+
+// AuthorizationServer is the issuer the metadata names, as given.
+func (m *ProtectedResourceMetadata) AuthorizationServer() string { return m.issuer }
 
 // Path is where the metadata is served on your host, such as
 // /.well-known/oauth-protected-resource/v1.

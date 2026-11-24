@@ -60,6 +60,37 @@ class UsageTest < Minitest::Test
     end
   end
 
+  def test_drops_a_batch_after_5_sends_that_keelie_answers_401_or_409
+    [401, 409].each do |refusal|
+      keelie = FakeKeelie.new
+      keelie.answers.concat([refusal, 503, refusal, refusal, :network, refusal, refusal])
+      capture_log do |lines|
+        usage = reporter(keelie, batch_size: 1, flush_interval_seconds: 0.01)
+        usage.record("client-a", "GET /a")
+        wait_until { lines.any? { _1.start_with?("apiable.usage_dropped") } }
+        sleep 0.05
+        # Five refusals in all, with a 503 and a network error between them.
+        assert_equal 7, keelie.count, refusal.inspect
+        assert_equal 1, keelie.sent.map(&:key).uniq.size
+        assert_includes lines, "apiable.usage_dropped events=1 reason=refused status=#{refusal}"
+        # The next batch is sent as usual.
+        usage.record("client-a", "GET /b")
+        wait_until { keelie.count == 8 }
+      end
+    end
+  end
+
+  def test_sends_a_batch_again_for_as_long_as_keelie_answers_5xx
+    keelie = FakeKeelie.new
+    keelie.answers.concat([503] * 8)
+    capture_log do |lines|
+      usage = reporter(keelie, batch_size: 1, flush_interval_seconds: 0.01)
+      usage.record("client-a", "GET /a")
+      wait_until { keelie.count == 9 }
+      refute(lines.any? { _1.start_with?("apiable.usage_dropped") })
+    end
+  end
+
   def test_waits_one_interval_before_a_retry_however_full_the_buffer
     keelie = FakeKeelie.new
     keelie.answers << 503

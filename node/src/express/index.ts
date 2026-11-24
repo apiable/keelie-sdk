@@ -17,8 +17,16 @@
  * Each guard also serves the RFC 9728 metadata at `metadata.path`, with no
  * token, and refuses a request with no token with `401` and
  * `WWW-Authenticate: Bearer resource_metadata="..."`, so an agent can find your
- * issuer. Paths outside `resource` and a CORS preflight (`OPTIONS`) pass
- * untouched.
+ * issuer. Paths outside `resource` and a CORS preflight pass untouched.
+ *
+ * A CORS preflight is an `OPTIONS` with an `Origin` and an
+ * `Access-Control-Request-Method` header, and none of the headers `X-HTTP-Method-Override`, `X-HTTP-Method` and
+ * `X-Method-Override`. Your CORS middleware answers it. Every other `OPTIONS`
+ * needs a token, as any other method does.
+ *
+ * The guards check only paths under `resource`. Your app must see the same path
+ * as the public `resource`. A proxy that strips the prefix, such as `/v1`, leaves
+ * every route unguarded.
  */
 
 import type { NextFunction, Request, RequestHandler, Response } from "express";
@@ -275,8 +283,9 @@ export interface McpGuardOptions extends GuardOptions {
  * - Every other method passes with no scope check: `initialize`,
  *   `notifications/*`, `ping`, `tools/list`, and also `resources/*` and
  *   `prompts/*`. Apiable sells tools, not resources or prompts.
- * - `GET`, `HEAD` and `DELETE` pass, and so does a CORS preflight (`OPTIONS`).
- *   Every other method gets `405`, with `Allow: GET, POST, DELETE`.
+ * - `GET`, `HEAD` and `DELETE` pass, and so does a CORS preflight. Every other
+ *   method gets `405`, with `Allow: GET, POST, DELETE`. That includes an
+ *   `OPTIONS` that is not a preflight.
  *
  * Every refusal is a JSON-RPC error:
  *
@@ -293,7 +302,8 @@ export interface McpGuardOptions extends GuardOptions {
  *
  * The usage event is recorded when your server starts a `2xx` response, not at
  * the end of its body, so a `text/event-stream` reply streams through
- * unbuffered. The event carries no `credits`.
+ * unbuffered. The event carries no `credits`. The guard does not read the reply:
+ * a JSON-RPC error, or a result with `isError`, inside a `200` is counted too.
  *
  * If a body parser has already read the body, the guard reads `req.body` as it
  * found it. It then cannot tell a key given twice, so mount it first.
@@ -424,12 +434,22 @@ type Handle = (claims: Claims, req: Request, res: Response, next: NextFunction) 
  * 8707), and keelie writes your org's `resource` into `aud`. A verifier for
  * another audience would refuse every such token, or accept a token for another
  * server. Set your org's `resource` in keelie to the same value.
+ *
+ * In the same way, the verifier's issuer must be the metadata's
+ * `authorizationServer`. An agent gets its token from the issuer the metadata
+ * names, and the verifier refuses a token of any other issuer.
  */
 function guard({ verifier, metadata }: GuardOptions, handle: Handle): RequestHandler {
   if (verifier.audience !== metadata.resource) {
     throw new TypeError(
       `the verifier's audience ${JSON.stringify(verifier.audience)} is not the resource ` +
         `${JSON.stringify(metadata.resource)}: give both the same value`,
+    );
+  }
+  if (verifier.issuer !== metadata.authorizationServer) {
+    throw new TypeError(
+      `the verifier's issuer ${JSON.stringify(verifier.issuer)} is not the authorization server ` +
+        `${JSON.stringify(metadata.authorizationServer)}: give both the same value`,
     );
   }
   const challenge = metadata.challenge();
@@ -442,7 +462,7 @@ function guard({ verifier, metadata }: GuardOptions, handle: Handle): RequestHan
       respond(res, 200, { "Content-Type": "application/json" }, metadata.document);
       return;
     }
-    if (!guarded(req, path, metadata)) {
+    if (!guarded(req, requestPaths(req), metadata)) {
       next();
       return;
     }
@@ -461,32 +481,55 @@ function guard({ verifier, metadata }: GuardOptions, handle: Handle): RequestHan
   };
 }
 
+// A framework can route a request with one of these as the method they name.
+const METHOD_OVERRIDE_HEADERS = ["x-http-method-override", "x-http-method", "x-method-override"];
+
+/**
+ * True for a CORS preflight: an `OPTIONS` with `Origin` and
+ * `Access-Control-Request-Method`, and with no header that could make a framework route it as another method.
+ * Your CORS middleware answers it. Every other `OPTIONS` needs a token.
+ */
+function isPreflight(req: Request): boolean {
+  return (
+    req.method === "OPTIONS" &&
+    req.headers["origin"] !== undefined &&
+    req.headers["access-control-request-method"] !== undefined &&
+    METHOD_OVERRIDE_HEADERS.every((name) => req.headers[name] === undefined)
+  );
+}
+
 /**
  * True for a request under `resource` that must carry a token.
  *
- * A CORS preflight (`OPTIONS`) and every path outside `resource` pass. So does a
- * GET or a HEAD of the metadata, and of the AI Catalog at either of its paths
- * when the catalog serves it. Any other method on those paths needs a token.
+ * A CORS preflight and every path outside `resource` pass. So does a GET or a
+ * HEAD of the metadata, and of the AI Catalog at either of its paths when the
+ * catalog serves it. Any other method on those paths needs a token.
  *
- * The path is compared in every form Express could route it by: as sent, with
+ * `paths` holds the path the client sent and the path Express routes by. They
+ * differ when a middleware before the guard rewrote `req.url`. The request is
+ * guarded when either of them is under `resource`.
+ *
+ * Each path is compared in every form Express could route it by: as sent, with
  * its dot segments resolved, with its escapes read and its doubled slashes
  * folded, and without case, because Express routes without case unless you set
  * `case sensitive routing`. A request that is under `resource` in any of these
  * forms is guarded. It can only guard more than the router serves, never less.
  */
-function guarded(req: Request, path: string, metadata: ProtectedResourceMetadata): boolean {
-  if (req.method === "OPTIONS") return false;
-  if (
-    (req.method === "GET" || req.method === "HEAD") &&
-    (path === metadata.path || (metadata.aiCatalog && CATALOG_MEDIA_TYPES.has(path)))
-  ) {
-    return false;
-  }
+function guarded(req: Request, paths: readonly string[], metadata: ProtectedResourceMetadata): boolean {
+  if (isPreflight(req)) return false;
   const prefix = metadata.prefix.toLowerCase();
-  if (prefix === "") return true;
-  return pathForms(path).some((form) => {
-    const lower = form.toLowerCase();
-    return lower === prefix || lower.startsWith(`${prefix}/`);
+  return paths.some((path) => {
+    if (
+      (req.method === "GET" || req.method === "HEAD") &&
+      (path === metadata.path || (metadata.aiCatalog && CATALOG_MEDIA_TYPES.has(path)))
+    ) {
+      return false;
+    }
+    if (prefix === "") return true;
+    return pathForms(path).some((form) => {
+      const lower = form.toLowerCase();
+      return lower === prefix || lower.startsWith(`${prefix}/`);
+    });
   });
 }
 
@@ -510,7 +553,20 @@ function pathForms(path: string): string[] {
 
 /** The path of the request as the client sent it, without the query, whatever router it is in. */
 function rawPath(req: Request): string {
-  const url = req.originalUrl ?? req.url;
+  return withoutQuery(req.originalUrl ?? req.url);
+}
+
+/**
+ * The path the client sent, and the path Express routes by: `req.baseUrl` and
+ * `req.url`. A middleware that rewrites `req.url` changes the second one only.
+ */
+function requestPaths(req: Request): string[] {
+  const sent = rawPath(req);
+  const routed = withoutQuery(`${req.baseUrl ?? ""}${req.url}`);
+  return routed === sent ? [sent] : [sent, routed];
+}
+
+function withoutQuery(url: string): string {
   const end = url.search(/[?#]/);
   return end === -1 ? url : url.slice(0, end);
 }

@@ -264,8 +264,20 @@ func TestGETHEADAndDELETEPassAndOtherMethodsGet405(t *testing.T) {
 			t.Fatalf("%s: %d %v", method, res.Code, res.Header())
 		}
 	}
-	if res := s.request("OPTIONS", "", ""); res.Code != 200 {
-		t.Fatalf("a preflight: %d", res.Code)
+	preflight := httptest.NewRequest("OPTIONS", "/mcp", nil)
+	preflight.Header.Set("Origin", "https://app.example.com")
+	preflight.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	s.handler.ServeHTTP(rec, preflight)
+	if rec.Code != 200 {
+		t.Fatalf("a preflight: %d", rec.Code)
+	}
+	// Any other OPTIONS request needs a token, and then gets 405.
+	if res := s.request("OPTIONS", "", ""); res.Code != 401 {
+		t.Fatalf("OPTIONS with no token: %d", res.Code)
+	}
+	if res := s.request("OPTIONS", call("1", `"delete_all"`), mcpToken()); res.Code != 405 {
+		t.Fatalf("OPTIONS with a token: %d", res.Code)
 	}
 }
 

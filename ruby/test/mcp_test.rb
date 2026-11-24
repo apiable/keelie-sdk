@@ -147,6 +147,15 @@ class McpTest < Minitest::Test
     assert_equal [405, "GET, POST, DELETE"], [put[0], put[1]["allow"]]
   end
 
+  def test_needs_a_token_for_an_options_request_that_is_not_a_preflight
+    assert_equal 401, raw(@url, "OPTIONS", "/mcp")[0]
+    options = raw(@url, "OPTIONS", "/mcp", "Authorization" => "Bearer #{@token}")
+    assert_equal [405, "GET, POST, DELETE"], [options[0], options[1]["allow"]]
+    assert_equal 401, raw(@url, "OPTIONS", "/mcp", "Access-Control-Request-Method" => "POST")[0]
+    preflight = raw(@url, "OPTIONS", "/mcp", "Access-Control-Request-Method" => "POST", "Origin" => "https://a.example")
+    refute_includes [401, 405], preflight[0] # the server's own answer
+  end
+
   def test_checks_the_token_first
     none = post("{}", auth: nil)
     assert_equal [401, @metadata.challenge], [none[0], none[1]["www-authenticate"]]

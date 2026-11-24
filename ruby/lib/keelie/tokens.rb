@@ -70,15 +70,16 @@ module Keelie
     # The extensions PyJWT understands in +crit+.
     CRITICAL = ["b64"].freeze
 
-    attr_reader :audience
+    attr_reader :issuer, :audience
 
-    # +issuer+ is the +issuer+ member of your org in keelie: your own realm.
+    # +issuer+ is the +issuer+ member of your org in keelie: your own realm. It must be
+    # https, or plain http on a loopback host, or ArgumentError is raised.
     # +audience+ is your API's +resource+ in keelie, exactly. +org_id+ is your org id;
     # a value that is not a UUID raises ArgumentError. +keys+ is the key set: one made
     # from +issuer+ unless you give another.
     def initialize(issuer, audience, org_id, keys: nil, leeway_seconds: LEEWAY_SECONDS)
       @org_id = UUID.parse(org_id.to_s) or raise ArgumentError, "org_id is not a UUID: #{org_id.inspect}"
-      @issuer = issuer
+      @issuer = HTTP.secure_url!("issuer", issuer)
       @audience = audience
       @keys = keys || SigningKeys.new(issuer)
       @leeway = leeway_seconds

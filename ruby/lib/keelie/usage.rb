@@ -32,6 +32,9 @@ module Keelie
   #
   # - A network error, a 401, 408, 409, 429 or a 5xx keeps the batch. The thread sends
   #   it again after one interval. It does not read +Retry-After+.
+  # - A batch that keelie answers with 401 or 409 is sent {MAX_REFUSED_SENDS} times at
+  #   most, in all. Then it is dropped, with a log line. A credential that keelie
+  #   refuses for good must not hold the buffer for ever.
   # - Any other answer drops the batch, with a log line. A retry gets the same answer.
   #   +usage-out-of-range+ is one of these: the batch would take a counter or a balance
   #   past the largest value keelie keeps.
@@ -66,6 +69,11 @@ module Keelie
     # The answers that can change on a retry. Every other failure drops the batch. A
     # 401 is one: the credential mints a new token for the next try.
     RETRY_STATUSES = [401, 408, 409, 429].freeze
+    # The answers that may change on a retry, but may also never change: a credential
+    # keelie refuses, or a key keelie holds for another body. A batch gets this many of
+    # them at most, in all, then it is dropped.
+    REFUSED_STATUSES = [401, 409].freeze
+    MAX_REFUSED_SENDS = 5
     CONTROL = /[\x00-\x1f\x7f]/
     PROBLEM_CODE = /\A[a-z0-9-]{1,64}\z/
 
@@ -237,8 +245,8 @@ module Keelie
     def reset
       @pid = Process.pid
       @events = []
-      # The batch on its way, kept as sent: [key, body, count]. A retry repeats its key
-      # and its body.
+      # The batch on its way, kept as sent: [key, body, count, refused], where +refused+
+      # counts its 401 and 409 answers. A retry repeats its key and its body.
       @pending = nil
       @dropped = 0
       @woken = false
@@ -295,7 +303,7 @@ module Keelie
             @pending ||= next_batch
           end
           return true if batch.nil?
-          return false unless deliver(*batch)
+          return false unless deliver(batch)
 
           @lock.synchronize { @pending = nil if @pending.equal?(batch) }
         end
@@ -308,11 +316,12 @@ module Keelie
       return nil if @events.empty?
 
       events = @events.shift(@batch_size)
-      [SecureRandom.uuid, JSON.generate({ "events" => events }, ascii_only: true), events.size]
+      [SecureRandom.uuid, JSON.generate({ "events" => events }, ascii_only: true), events.size, 0]
     end
 
     # Send one batch. True when it is done with: kept by keelie, or dropped.
-    def deliver(key, body, count)
+    def deliver(batch)
+      key, body, count = batch
       begin
         response = @keelie.call("POST", PATH, body: body,
                                               headers: { "Content-Type" => "application/json", "Idempotency-Key" => key })
@@ -325,6 +334,13 @@ module Keelie
       if status.between?(200, 299)
         Log.debug("apiable.usage_sent events=#{count}")
         return true
+      end
+      if REFUSED_STATUSES.include?(status)
+        batch[3] += 1
+        if batch[3] >= MAX_REFUSED_SENDS
+          Log.warn("apiable.usage_dropped events=#{count} reason=refused status=#{status}")
+          return true
+        end
       end
       if RETRY_STATUSES.include?(status) || status >= 500
         Log.warn("apiable.usage_not_sent events=#{count} status=#{status}")

@@ -54,6 +54,20 @@ describe("sdkCredential", () => {
     assert.equal(calls.at(-1)!.body, "{}");
   });
 
+  it("sends the secret and the token over https only, or to a loopback host", () => {
+    const base = { clientId: "sdk", clientSecret: "s3cret" };
+    for (const [keelieUrl, tokenUrl] of [
+      ["http://keelie.example", "https://issuer.example.com/token"],
+      ["https://keelie.example", "http://issuer.example.com/token"],
+      ["https://keelie.example", "not a url"],
+    ] as const) {
+      assert.throws(() => sdkCredential({ ...base, keelieUrl, tokenUrl }), TypeError, `${keelieUrl} ${tokenUrl}`);
+    }
+    assert.doesNotThrow(() =>
+      sdkCredential({ ...base, keelieUrl: "http://localhost:8000", tokenUrl: "http://127.0.0.1:8080/token" }),
+    );
+  });
+
   it("fails when the token endpoint refuses", async () => {
     const keelie = sdkCredential({
       keelieUrl: "https://keelie.example",

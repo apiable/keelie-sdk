@@ -60,11 +60,23 @@ public sealed class SigningKeysOptions
 /// <para>
 /// Once a key set is in hand, at most one fetch a minute, however many unknown <c>kid</c> values
 /// arrive and whether or not the fetch succeeds. A flood of made-up <c>kid</c> values costs the
-/// issuer one request a minute, also while the issuer is down. With no key set in hand, a failed
-/// fetch caches nothing, and the next caller tries again.
+/// issuer one request a minute, also while the issuer is down.
 /// </para>
 /// <para>
-/// The <c>jwks_uri</c> from the first discovery is kept for the life of the process. A discovery
+/// With no key set in hand, every caller waits for one fetch and gets its outcome. If that fetch
+/// fails, each of them is refused, and none fetches again. The failure is kept for 5 seconds: a
+/// token in that time is refused at once, and the issuer is not asked. After 5 seconds, the next
+/// token fetches again. Each document of a fetch must arrive in full within 5 seconds.
+/// </para>
+/// <para>
+/// A key set with no key the SDK can use is a failed fetch. The keys in hand stay and go on
+/// verifying. A key set with at least one usable key replaces the keys in hand, so a key the issuer
+/// retires is retired here too.
+/// </para>
+/// <para>
+/// The <c>jwks_uri</c> from the first discovery is kept for the life of the process. The issuer
+/// and the <c>jwks_uri</c> must be https. Plain http is allowed only to <c>localhost</c>,
+/// <c>127.0.0.1</c> and <c>[::1]</c>, for local development. A discovery
 /// document whose <c>issuer</c> is not the configured one is refused, and no key is fetched from it
 /// (OpenID Connect Discovery 1.0, section 4.3). Each Provider has its own realm, so each issuer has
 /// its own key set: a document of another realm must never fill this one's.
@@ -78,8 +90,11 @@ public sealed class SigningKeys
     /// <summary>How long the cache refuses a second fetch after one completed. Shorter than any token lifetime.</summary>
     public static readonly TimeSpan DefaultRefreshInterval = TimeSpan.FromSeconds(60);
 
-    /// <summary>How long one fetch of a document may take.</summary>
+    /// <summary>How long one fetch of a document may take, its whole body included.</summary>
     public static readonly TimeSpan FetchTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long a failed fetch with no key set in hand is kept. The issuer is not asked again before.</summary>
+    public static readonly TimeSpan ColdRetryAfter = TimeSpan.FromSeconds(5);
 
     private const int MinModulusBits = 2048;
     private const string Category = "Keelie.SigningKeys";
@@ -97,6 +112,11 @@ public sealed class SigningKeys
     // Every caller that finds the cache cold, or its kid missing, waits here. The issuer answers
     // one request, not one for each caller.
     private readonly SemaphoreSlim _lock = new(1, 1);
+    // The last cold fetch that failed: its error, when, and how many have failed. A caller that
+    // waited while one failed gets its outcome, and does not fetch again. Written under the lock.
+    private Exception? _coldError;
+    private long _coldFailedAt;
+    private int _coldFailures;
     private volatile IReadOnlyDictionary<string, RSAParameters> _keys = new Dictionary<string, RSAParameters>();
     private string? _jwksUri;
     private long? _fetchedAt;
@@ -106,6 +126,7 @@ public sealed class SigningKeys
     public SigningKeys(string issuer, SigningKeysOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(issuer);
+        KeelieHttp.RequireSecure(issuer, nameof(issuer));
         _issuer = issuer.TrimEnd('/');
         _client = options?.HttpClient ?? SharedClient;
         _time = options?.TimeProvider ?? TimeProvider.System;
@@ -116,19 +137,31 @@ public sealed class SigningKeys
     /// The key with this id, fetching the set once if it is not there.
     /// </summary>
     /// <exception cref="UnknownKey">No key has this id, after one fetch.</exception>
-    /// <exception cref="KeysUnavailable">No key set is in hand, and the fetch failed.</exception>
+    /// <exception cref="KeysUnavailable">No key set is in hand, and the fetch failed, now or in the last 5 seconds.</exception>
     public async Task<RSAParameters> GetKeyAsync(string kid)
     {
         if (_keys.TryGetValue(kid, out var known))
         {
             return known;
         }
+        var failuresBefore = Volatile.Read(ref _coldFailures);
         await _lock.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (!_keys.ContainsKey(kid) && MayFetch())
+            if (!_keys.ContainsKey(kid))
             {
-                await RefreshAsync().ConfigureAwait(false);
+                if (_fetchedAt is null && _coldError is { } error
+                    && (_coldFailures != failuresBefore || _time.GetElapsedTime(_coldFailedAt) < ColdRetryAfter))
+                {
+                    // Cold, and a fetch failed while this caller waited, or a moment ago: its
+                    // outcome, with no fetch of its own.
+                    Log.Warn(Category, "apiable.keys_unavailable: {Error}", Log.ErrorName(error));
+                    throw new KeysUnavailable(error);
+                }
+                if (MayFetch())
+                {
+                    await RefreshAsync().ConfigureAwait(false);
+                }
             }
         }
         finally
@@ -164,12 +197,21 @@ public sealed class SigningKeys
         try
         {
             keys = LoadKeys(await FetchKeySetAsync().ConfigureAwait(false));
+            if (keys.Count == 0)
+            {
+                // No usable key: a failed fetch. An empty set never replaces the keys in hand.
+                throw new KeySetError("keys");
+            }
         }
         catch (Exception error)
         {
             if (_fetchedAt is null)
             {
-                // Cold: nothing to verify with. Nothing is cached, so the next caller tries again.
+                // Cold: nothing to verify with. The failure is kept: the callers that waited for
+                // this fetch get it, and so does every caller for the next 5 seconds.
+                _coldError = error;
+                _coldFailedAt = _time.GetTimestamp();
+                Interlocked.Increment(ref _coldFailures);
                 Log.Warn(Category, "apiable.keys_unavailable: {Error}", Log.ErrorName(error));
                 throw new KeysUnavailable(error);
             }
@@ -183,6 +225,7 @@ public sealed class SigningKeys
         _keys = keys;
         _fetchedAt = _time.GetTimestamp();
         _refreshFailed = false;
+        _coldError = null;
         var kids = keys.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
         Log.Info(Category, "apiable.keys_loaded kids={Kids}", JsonSerializer.Serialize(kids));
     }
@@ -199,7 +242,9 @@ public sealed class SigningKeys
                 throw new KeySetError("issuer");
             }
             var uri = Field(discovery.RootElement, "jwks_uri");
-            if (uri.ValueKind != JsonValueKind.String)
+            // The key set comes over https only, or from a loopback host in local development.
+            if (uri.ValueKind != JsonValueKind.String
+                || !Uri.TryCreate(uri.GetString(), UriKind.Absolute, out var parsed) || !KeelieHttp.IsSecure(parsed))
             {
                 throw new KeySetError("jwks_uri");
             }
@@ -213,13 +258,27 @@ public sealed class SigningKeys
 
     private async Task<JsonDocument> GetJsonAsync(string url)
     {
+        // One deadline for the whole document: the answer and its body. WaitAsync as well as the
+        // token, so a handler that does not watch its token cannot hold the fetch longer.
         using var timeout = new CancellationTokenSource(FetchTimeout);
-        using var response = await _client.GetAsync(url, timeout.Token).ConfigureAwait(false);
+        var sending = _client.GetAsync(url, timeout.Token);
+        HttpResponseMessage answer;
+        try
+        {
+            answer = await sending.WaitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // An answer that comes after all is not read.
+            _ = sending.ContinueWith(late => late.Result.Dispose(), CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+            throw;
+        }
+        using var response = answer;
         if (!response.IsSuccessStatusCode)
         {
             throw new KeySetError($"status {(int)response.StatusCode}");
         }
-        var body = await response.Content.ReadAsByteArrayAsync(timeout.Token).ConfigureAwait(false);
+        var body = await response.Content.ReadAsByteArrayAsync(timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
         return JsonDocument.Parse(body);
     }
 

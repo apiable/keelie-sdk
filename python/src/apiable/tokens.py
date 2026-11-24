@@ -32,7 +32,14 @@ from uuid import UUID
 
 import jwt
 
-from apiable.keys import ALGORITHM, KeysUnavailable, SigningKeys, Status, UnknownKey
+from apiable.keys import (
+    ALGORITHM,
+    KeysUnavailable,
+    SigningKeys,
+    Status,
+    UnknownKey,
+    secure_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +96,8 @@ class TokenVerifier:
     """Verifies the tokens of one issuer, for one audience and one org.
 
     ``issuer`` is the ``issuer`` member of your org in keelie: your own realm.
+    It must be an https URL. Plain http is allowed only for a loopback host
+    (``localhost``, ``127.0.0.1``, ``[::1]``), for local development.
     """
 
     def __init__(
@@ -100,11 +109,16 @@ class TokenVerifier:
         keys: SigningKeys | None = None,
         leeway_seconds: int = LEEWAY_SECONDS,
     ) -> None:
-        self._issuer = issuer
+        self._issuer = secure_url("issuer", issuer)
         self._audience = audience
         self._org_id = UUID(str(org_id))
         self._keys = keys if keys is not None else SigningKeys(issuer)
         self._leeway = leeway_seconds
+
+    @property
+    def issuer(self) -> str:
+        """The ``iss`` every token must carry: your org's ``issuer`` in keelie."""
+        return self._issuer
 
     @property
     def audience(self) -> str:

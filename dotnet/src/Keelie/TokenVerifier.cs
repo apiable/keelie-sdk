@@ -166,10 +166,15 @@ public sealed class TokenVerifier
     /// <paramref name="audience"/>, your API's <c>resource</c> in keelie, exactly; and
     /// <paramref name="orgId"/>, your org's <c>id</c>.
     /// </summary>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="issuer"/> is not https. Plain http is allowed only to <c>localhost</c>,
+    /// <c>127.0.0.1</c> and <c>[::1]</c>, for local development.
+    /// </exception>
     public TokenVerifier(string issuer, string audience, Guid orgId, TokenVerifierOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(issuer);
         ArgumentNullException.ThrowIfNull(audience);
+        KeelieHttp.RequireSecure(issuer, nameof(issuer));
         _issuer = issuer;
         Audience = audience;
         _orgId = orgId;
@@ -189,6 +194,9 @@ public sealed class TokenVerifier
 
     /// <summary>The <c>aud</c> every token must carry: your server's <c>resource</c> in keelie.</summary>
     public string Audience { get; }
+
+    /// <summary>The <c>iss</c> every token must carry: your org's <c>issuer</c> in keelie.</summary>
+    public string Issuer => _issuer;
 
     /// <summary>
     /// What the SDK knows of the issuer, from its last fetch of the key set.

@@ -10,6 +10,7 @@ RESOURCE = "https://api.example.test/mcp"
 ISSUER = "https://issuer.example.test/realms/test"
 METADATA_URL = "https://api.example.test/.well-known/oauth-protected-resource/mcp"
 CHALLENGE = f'Bearer resource_metadata="{METADATA_URL}"'
+PREFLIGHT = {"Origin": "https://app.example.test", "Access-Control-Request-Method": "POST"}
 
 
 class App:
@@ -119,10 +120,35 @@ async def test_a_scope_that_is_not_http_passes_to_the_app(kind: str) -> None:
 
 
 async def test_a_cors_preflight_passes_with_no_token() -> None:
-    async with _client(App()) as client:
-        response = await client.options("/mcp")
+    app = App()
+    async with _client(app) as client:
+        response = await client.options("/mcp", headers=PREFLIGHT)
 
     assert response.status_code == 204
+    assert app.seen == ["http"]
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"Origin": "https://app.example.test"},
+        # A CORS middleware passes an OPTIONS with no Origin on to the app.
+        {"Access-Control-Request-Method": "POST"},
+        *(
+            {**PREFLIGHT, override: "GET"}
+            for override in ("X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override")
+        ),
+    ],
+)
+async def test_an_options_that_is_not_a_preflight_needs_a_token(headers: dict[str, str]) -> None:
+    app = App()
+    async with _client(app) as client:
+        response = await client.options("/mcp", headers=headers)
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == CHALLENGE
+    assert app.seen == []
 
 
 def test_the_challenge_for_a_refused_token_carries_the_error() -> None:
@@ -170,3 +196,22 @@ async def test_another_method_on_the_metadata_path_needs_a_token(method: str) ->
         response = await client.request(method, "/.well-known/oauth-protected-resource")
 
     assert response.status_code == 401
+
+
+def test_a_loopback_http_issuer_is_an_authorization_server_for_local_development() -> None:
+    metadata = ProtectedResourceMetadata(RESOURCE, "http://localhost:8080/realms/test")
+
+    assert metadata.authorization_server == "http://localhost:8080/realms/test"
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        "http://issuer.example.test/realms/test",
+        "https://user@issuer.example.test/realms/test",
+        "HTTP://localhost:8080/realms/test",
+    ],
+)
+def test_an_authorization_server_that_is_not_https_or_loopback_is_refused(server: str) -> None:
+    with pytest.raises(ValueError):
+        ProtectedResourceMetadata(RESOURCE, server)

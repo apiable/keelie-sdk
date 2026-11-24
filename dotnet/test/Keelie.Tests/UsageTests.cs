@@ -182,6 +182,48 @@ public sealed class UsageTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_batch_answered_401_or_409_five_times_is_dropped()
+    {
+        // A revoked credential gets these answers for good. The batch must not block the next one.
+        foreach (var status in new[] { 401, 409, 401, 409, 401 })
+        {
+            _keelie.Answers.Enqueue(status);
+        }
+        var reporter = Reporter(batchSize: 1, intervalSeconds: 0.02);
+
+        reporter.Record(ClientId, "first");
+        await Wait.UntilAsync(() => LogCapture.Text.Contains("apiable.usage_dropped", StringComparison.Ordinal));
+        reporter.Record(ClientId, "second");
+        await Wait.UntilAsync(() => _keelie.Requests.Count == 6);
+        await Task.Delay(100);
+        await reporter.CloseAsync();
+
+        var keys = _keelie.Requests.Select(request => request.Headers["Idempotency-Key"]).ToArray();
+        Assert.Equal(6, keys.Length);
+        Assert.Single(keys[..5].Distinct());
+        Assert.NotEqual(keys[0], keys[5]);
+        Assert.Equal(["first", "first", "first", "first", "first", "second"], _keelie.Batches().Select(batch => batch[0]["capability_key"]));
+        Assert.Contains("apiable.usage_dropped events=1 reason=refused status=401", LogCapture.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_batch_answered_401_four_times_is_still_sent()
+    {
+        foreach (var status in new[] { 401, 401, 409, 401 })
+        {
+            _keelie.Answers.Enqueue(status);
+        }
+        var reporter = Reporter(batchSize: 1, intervalSeconds: 0.02);
+
+        reporter.Record(ClientId, "first");
+        await Wait.UntilAsync(() => _keelie.Requests.Count == 5);
+        await reporter.CloseAsync();
+
+        Assert.Single(_keelie.Requests.Select(request => request.Headers["Idempotency-Key"]).Distinct());
+        Assert.DoesNotContain("apiable.usage_dropped", LogCapture.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_refusal_with_invalid_utf8_is_dropped_and_never_sent_again()
     {
         _keelie.Answers.Enqueue(400);

@@ -36,6 +36,11 @@ for (const [name, express] of [
     const catalog = new AiCatalog(async () => Response.json({ entries: [] }), metadata);
     const app = express();
     app.use(aiCatalog(catalog));
+    // A middleware before the guard that rewrites the path Express routes by.
+    app.use((req, _res, next) => {
+      if (req.url.startsWith("/legacy/")) req.url = `/v1/${req.url.slice("/legacy/".length)}`;
+      next();
+    });
     app.use(tokenGuard({ verifier, metadata }));
     app.get("/health", (_req, res) => {
       res.json({ ok: true });
@@ -70,6 +75,11 @@ for (const [name, express] of [
     app.get("/v1/no-claims-check", (req, res) => {
       res.json({ claims: req.keelieClaims !== undefined });
     });
+    let resets = 0;
+    app.all("/v1/admin/reset", (_req, res) => {
+      resets += 1;
+      res.status(204).end();
+    });
 
     let url = "";
     let close = async () => {};
@@ -80,8 +90,8 @@ for (const [name, express] of [
     });
     after(() => close());
 
-    const get = (path: string, auth?: string, method = "GET") =>
-      fetch(`${url}${path}`, { method, headers: auth ? { Authorization: auth } : {} });
+    const get = (path: string, auth?: string, method = "GET", headers: Record<string, string> = {}) =>
+      fetch(`${url}${path}`, { method, headers: { ...headers, ...(auth ? { Authorization: auth } : {}) } });
 
     it("serves the metadata with no token", async () => {
       const response = await get("/.well-known/oauth-protected-resource/v1");
@@ -151,7 +161,43 @@ for (const [name, express] of [
 
     it("lets paths outside resource, and a preflight, pass untouched", async () => {
       assert.equal((await get("/health")).status, 200);
-      assert.notEqual((await get("/v1/orders/42", undefined, "OPTIONS")).status, 401);
+      const preflight = { Origin: "https://app.example.com", "Access-Control-Request-Method": "POST" };
+      assert.notEqual((await get("/v1/orders/42", undefined, "OPTIONS", preflight)).status, 401);
+      const before = resets;
+      assert.equal((await get("/v1/admin/reset", undefined, "OPTIONS", preflight)).status, 204);
+      assert.equal(resets, before + 1);
+    });
+
+    it("guards an OPTIONS that is not a preflight, as any other method", async () => {
+      const before = resets;
+      // No Access-Control-Request-Method: not a preflight. app.all() would run the handler.
+      const plain = await get("/v1/admin/reset", undefined, "OPTIONS");
+      assert.equal(plain.status, 401);
+      assert.equal(plain.headers.get("www-authenticate"), metadata.challenge());
+      // No Origin: not a preflight either.
+      const noOrigin = await get("/v1/admin/reset", undefined, "OPTIONS", { "Access-Control-Request-Method": "POST" });
+      assert.equal(noOrigin.status, 401);
+      // A method-override header could make a framework route it as another method.
+      for (const header of ["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"]) {
+        const overridden = await get("/v1/admin/reset", undefined, "OPTIONS", {
+          Origin: "https://app.example.com",
+          "Access-Control-Request-Method": "GET",
+          [header]: "GET",
+        });
+        assert.equal(overridden.status, 401, header);
+      }
+      assert.equal(resets, before);
+      assert.equal((await get("/v1/admin/reset", `Bearer ${token}`, "OPTIONS")).status, 204);
+      assert.equal(resets, before + 1);
+    });
+
+    it("guards a request that a middleware rewrote into resource", async () => {
+      const refused = await get("/legacy/orders/42");
+      assert.equal(refused.status, 401);
+      assert.equal(refused.headers.get("www-authenticate"), metadata.challenge());
+      const allowed = await get("/legacy/orders/42", `Bearer ${token}`);
+      assert.equal(allowed.status, 200);
+      assert.deepEqual(await allowed.json(), { orderId: "42", azp: "consumer-client" });
     });
 
     it("guards every form of a path Express would route", async () => {
@@ -273,5 +319,20 @@ describe("the guards", () => {
     const verifier = new TokenVerifier(ISSUER, "https://api.example.com/v2", ORG_ID);
     const metadata = new ProtectedResourceMetadata(RESOURCE, ISSUER);
     assert.throws(() => tokenGuard({ verifier, metadata }), TypeError);
+  });
+
+  it("do not start when the verifier's issuer is not the authorization server", () => {
+    const verifier = new TokenVerifier(ISSUER, RESOURCE, ORG_ID);
+    const metadata = new ProtectedResourceMetadata(RESOURCE, "https://issuer.example.com/realms/other");
+    assert.throws(() => tokenGuard({ verifier, metadata }), /issuer/);
+    assert.doesNotThrow(() => tokenGuard({ verifier, metadata: new ProtectedResourceMetadata(RESOURCE, ISSUER) }));
+  });
+
+  it("start with a loopback http issuer, for local development", () => {
+    const local = "http://localhost:8080/realms/dev";
+    const verifier = new TokenVerifier(local, RESOURCE, ORG_ID);
+    const metadata = new ProtectedResourceMetadata(RESOURCE, local);
+    assert.doesNotThrow(() => tokenGuard({ verifier, metadata }));
+    assert.throws(() => new ProtectedResourceMetadata(RESOURCE, "http://issuer.example.com/realms/a"), TypeError);
   });
 });

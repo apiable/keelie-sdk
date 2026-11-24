@@ -37,8 +37,10 @@ Give your application the values from steps 1 and 2 of the quickstart, from the 
 `KEELIE_URL`, `KEELIE_TOKEN_URL`, `KEELIE_ISSUER`, `KEELIE_ORG_ID`, `KEELIE_RESOURCE`,
 `KEELIE_SDK_CLIENT_ID` and `KEELIE_SDK_CLIENT_SECRET`.
 
-The SDK needs https for your API and for the issuer, as in Python. Test it against a hosted keelie,
-not a local stack, which serves plain http.
+The SDK needs https for your API, the issuer, keelie and the token URL. For the issuer, keelie and
+the token URL, plain http is allowed only to `localhost`, `127.0.0.1` and `[::1]`, for local
+development. Your API's `resource` must always be https. A URL with a user, such as
+`https://user@host`, is refused.
 
 ```csharp
 using Keelie;
@@ -85,8 +87,9 @@ What each line does:
 
 - `SdkCredential.CreateClient` makes the one `HttpClient` the SDK talks to keelie with. It mints a
   token of your SDK credential, keeps it until shortly before it expires, and mints again on a `401`.
-- `UseKeelieTokenGuard` checks the token of every request under your address. It refuses a missing
-  or bad token with `401`, before your endpoint runs, and puts the claims on the request.
+- `UseKeelieTokenGuard` checks the token of each request under your address. It refuses a missing
+  or bad token with `401`, before your endpoint runs, and puts the claims on the request. A CORS
+  preflight passes with no token (see [`UseKeelieTokenGuard`](#usekeelietokenguard)).
 - `RequireKeelieScope` refuses a token that does not carry the scope of the endpoint, with `403`.
 - `reporter.Record` puts one usage event in memory and returns at once. A background task sends the
   events to keelie every 5 seconds. `credits` is what the call costs the Consumer. `consumerId` names
@@ -132,7 +135,7 @@ new TokenVerifier(string issuer, string audience, string orgId, TokenVerifierOpt
 
 | Argument | Value |
 |---|---|
-| `issuer` | `issuer` from the signup answer: your own realm. |
+| `issuer` | `issuer` from the signup answer: your own realm. `https`, with no user. Plain `http` only to `localhost`, `127.0.0.1` or `[::1]`. Otherwise `ArgumentException`. |
 | `audience` | Your API's address, the `resource` you registered. Every token carries it in `aud`. Give the same value to `ProtectedResourceMetadata`. |
 | `orgId` | `id` from the signup answer. As text, a value that is not a UUID throws `ArgumentException`. |
 | `options.Keys` | The key set. Leave it out in production. Give one in tests (see [Test with no network](#test-with-no-network)). |
@@ -171,6 +174,21 @@ it on your health page or in your metrics.
 The SDK does not poll the issuer. It fetches the key set on a cold start, and for a token that
 names a key it does not know, at most once a minute. To see how long a Consumer keeps working while
 keelie is down, read `claims.ExpiresAt`.
+
+### The key set
+
+- A fetch reads the issuer's discovery document, then the key set at its `jwks_uri`. Each document
+  must arrive in full within 5 seconds. The `jwks_uri` must be https, or http to a loopback host.
+- On a cold start, all callers wait for one fetch and get its outcome. If the fetch fails, each of
+  them is refused with `keys_unavailable`. None of them fetches again.
+- After a cold fetch fails, the SDK keeps the failure for 5 seconds. A token in that time is refused
+  at once with `keys_unavailable`, and the issuer is not asked. After 5 seconds, the next token
+  fetches again.
+- A key set with no key the SDK can use is a failed fetch. The keys in hand stay and go on
+  verifying, and the status is `Degraded`. On a cold start, the token is refused with
+  `keys_unavailable`.
+- A key set with at least one usable key replaces the keys in hand. So a key the issuer retires is
+  retired here too.
 
 ### `Claims`
 
@@ -221,7 +239,22 @@ app.UseKeelieTokenGuard(verifier, metadata);
 | No Bearer token | `401`, `WWW-Authenticate: Bearer resource_metadata="..."` |
 | A token that does not verify | `401`, `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="..."`, an empty body. The same answer for every reason. |
 | A token that verifies | Your endpoint runs. It reads the claims with `HttpContext.GetKeelieClaims()`. |
-| A path outside your address, or a CORS preflight (`OPTIONS`) | Your app, untouched. |
+| A path outside your address | Your app, untouched. |
+| A CORS preflight: `OPTIONS` with an `Origin` and an `Access-Control-Request-Method` header, and none of the headers `X-HTTP-Method-Override`, `X-HTTP-Method` and `X-Method-Override` | Your app, untouched. |
+| Any other `OPTIONS` request | Checked like any other method. No token gets `401`. |
+
+A preflight carries no token, so the guard lets it pass. Your CORS middleware must answer it:
+
+- Add `app.UseCors()`.
+- Apply a CORS policy to every endpoint under your address, or set a default policy.
+
+ASP.NET Core's CORS middleware passes a preflight on to the endpoint when no policy applies to that
+endpoint, even with `Origin`. The preflight then reaches your endpoint with no token. An endpoint
+mapped with `Map`, or an MVC action with only `[Route]`, then runs.
+
+An `OPTIONS` request with no `Origin` is never a preflight. Neither is a request with
+`X-HTTP-Method-Override`, `X-HTTP-Method` or `X-Method-Override`. `UseHttpMethodOverride` routes a
+`POST` by `X-HTTP-Method-Override`, and the guard checks its token in every case.
 
 It compares the path in every form ASP.NET Core could route it by: with and without the path base,
 as Kestrel decoded it, as the client sent it, with escapes read, dot segments resolved and doubled slashes folded, and without
@@ -236,8 +269,14 @@ routes `/v1/orders/42` as well as `/api/v1/orders/42`, and behind a proxy that s
 sees only `/v1/orders/42`, so the guard checks the token in each case. The cost is that a path under
 a tail, such as `/v1/health`, needs a token too, even when your app serves it outside the resource.
 
+> **Warning:** your app must see the path of the public `resource`, or a tail of it. The guard
+> checks only paths under those. A proxy or gateway that strips the whole path, such as `/v1` of
+> `https://api.example.com/v1`, leaves every route unguarded. Your app then sees `/orders/42`, which
+> is outside the resource.
+
 The verifier's `Audience` must be the `Resource` of the metadata, or `UseKeelieTokenGuard` throws
-`ArgumentException` when you add it.
+`ArgumentException` when you add it. In the same way, the verifier's `Issuer` must be the
+`AuthorizationServer` of the metadata.
 
 ## `RequireKeelieScope`
 
@@ -297,12 +336,18 @@ It answers as the Python `McpGuard` does:
 | A key the guard reads in another case: `Method`, `ID`, `Params` or `JSONRPC` in the request, `Name` in the `params` of a `tools/call` | `400`, `-32600` |
 | A `tools/call` whose `params.name` is not a string | `400`, `-32602` |
 | A body over `maxBodyBytes` | `413`, `-32600` |
-| `GET`, `HEAD`, `DELETE`, or a CORS preflight (`OPTIONS`) | Your server. |
+| `GET`, `HEAD` or `DELETE` | Your server. |
+| A CORS preflight, as for `UseKeelieTokenGuard` | Your server, with no token. Your CORS middleware must answer it. |
+| Any other `OPTIONS` request | With no token, `401`. With a good token, `405`. |
 | Any other method | `405`, `Allow: GET, POST, DELETE` |
 
 Token refusals are the same as for `UseKeelieTokenGuard`. The event is recorded before the body of
 the response, so a `text/event-stream` reply streams through unbuffered. It carries no credits, and
 it names `claims.ConsumerId` for you.
+
+> **Warning:** the guard counts each `tools/call` that gets an HTTP `2xx` as one tool call. It does
+> not read the body of the answer. A JSON-RPC error, or a result with `isError: true`, inside an
+> HTTP `200` is counted as usage too.
 
 ---
 
@@ -315,7 +360,7 @@ new ProtectedResourceMetadata(string resource, string authorizationServer, IEnum
 | Argument | Value |
 |---|---|
 | `resource` | The address of your API, exactly as a client calls it. `https`, a lowercase scheme and host, no user, query, fragment or final slash. |
-| `authorizationServer` | Your `issuer`, the same value you give `TokenVerifier`. |
+| `authorizationServer` | Your `issuer`, the same value you give `TokenVerifier`. Each guard refuses to start when the two differ. The rules of `resource`, but plain `http` is allowed to `localhost`, `127.0.0.1` and `[::1]`. |
 | `scopesSupported` | The scopes to publish. Left out, the metadata names none. |
 
 **Throws** `ArgumentException` for an address that breaks those rules, or a scope that is not one
@@ -410,12 +455,17 @@ Starts the background task. The first `Record()` starts it too.
 Stops the task and sends what is left, once. What it cannot send in `timeout` (10 seconds) is lost,
 with one log line. It never throws. `await using` calls it for you.
 
+The buffer is in memory only. On a serverless platform, such as AWS Lambda or Azure Functions, call
+`CloseAsync` before each invocation ends. The platform can freeze or stop the process after the
+answer. Events that are still in the buffer are then lost.
+
 ### What happens to a batch
 
 | keelie answers | The SDK |
 |---|---|
 | `2xx` | Done. |
 | A network error, `401`, `408`, `409`, `429`, `5xx` | Keeps the batch, and sends it again after one interval, with the same `Idempotency-Key` and the same body. keelie keeps each event once. |
+| `401` or `409` for the fifth time for the same batch | Drops the batch, with `apiable.usage_dropped events=N reason=refused`. A revoked credential gets these answers for good. The batches after it are then sent. |
 | Any other answer | Drops the batch, with a log line. A retry gets the same answer. |
 
 ## `SdkCredential`
@@ -427,10 +477,15 @@ new SdkCredential(SdkCredentialOptions options)   // a DelegatingHandler, for yo
 
 | Option | Value |
 |---|---|
-| `KeelieUrl` | `KEELIE_URL`. The client's base address. |
-| `TokenUrl` | `KEELIE_TOKEN_URL`. |
+| `KeelieUrl` | `KEELIE_URL`. The client's base address. `https`, or `http` to a loopback host. |
+| `TokenUrl` | `KEELIE_TOKEN_URL`. `https`, or `http` to a loopback host. |
 | `ClientId`, `ClientSecret` | `sdk_credential` from the signup answer. Never your admin credential. |
 | `Timeout` | How long a call to keelie may take, with the token it mints first. 10 seconds, as the Python quickstart's client. More than zero. |
+
+The secret and the token go over https only. `CreateClient` and `new SdkCredential` throw
+`ArgumentException` for a URL that is not https. Plain http is allowed only to `localhost`,
+`127.0.0.1` and `[::1]`. The handler also throws `InvalidOperationException` for a request to any
+other http address, and sends nothing.
 
 It mints a token with the client credentials grant, keeps it until `max(lifetime - 30 s, lifetime / 2)`
 has passed, shares one mint between every caller that waits on it, and on a `401` mints again and
@@ -518,11 +573,11 @@ test can move the clock of the key-set refresh and of the catalog cache. The pac
 | A token endpoint that does not answer | The client's `timeout=10` ends the call; the next call mints again | The same: `Timeout`, 10 seconds, ends the mint, and the next call mints again |
 | A redirect from the token endpoint | Not followed: httpx follows none by default. `raise_for_status()` raises on it. | Not followed, and an `HttpRequestException`. `SdkCredential` refuses a handler under it that follows redirects. |
 | Path comparison | As the ASGI server gives it | Every form ASP.NET Core could route: with and without the path base, as decoded, as sent, escapes read, dot segments resolved, doubled slashes folded, without case |
-| A path base, or a proxy that strips a prefix | Mount the guard where the app's path and `resource` agree | Guarded either way: a path under any tail of the resource path (`/v1` of `/api/v1`) needs a token, so a path such as `/v1/health` does too |
-| A WebSocket under your address | Passes untouched: it is not an HTTP request in ASGI | Needs a token, as every request does. In ASP.NET Core a WebSocket starts as an HTTP request. |
+| A path base, or a proxy that strips a prefix | Mount the guard where the app's path and `resource` agree | Guarded while the app sees the resource path or a tail of it (`/v1` of `/api/v1`), so a path such as `/v1/health` needs a token too. A proxy that strips the whole path leaves every route unguarded. |
+| A WebSocket under your address | Passes untouched: it is not an HTTP request in ASGI | Needs a token, as any other request under your address. In ASP.NET Core a WebSocket starts as an HTTP request. |
 | `MissingTokenChallenge` on its own | Exported | Not ported. The guards include it, as in Node. |
 | A key set with an RSA key under 2048 bits | Loaded | Skipped, with `apiable.key_skipped`, as in Node |
-| Fetch of the key set | 5-second timeout on the client the SDK makes itself; redirects not followed | 5-second timeout on each document, whichever client; the SDK's own client follows no redirect. A client you give follows its own setting. |
+| Fetch of the key set | 5-second timeout on the client the SDK makes itself; redirects not followed | A 5-second deadline on each document, its body included, whichever client; the SDK's own client follows no redirect. A client you give follows its own setting. |
 | The status | `verifier.status()`, a string | `verifier.Status`, an `IssuerStatus` |
 | The reason of a refusal | `TokenRejected.reason`, a string | `TokenRejected.Reason`, a `RejectionReason`, and `ReasonCode`, the same string as in Python |
 | A `resource` with an empty query or fragment, such as `https://api.example.com/v1?` | Taken: the URL parser reads it as no query | Refused, as in Node |

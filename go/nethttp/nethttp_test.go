@@ -220,14 +220,62 @@ func TestScopeGuardForReadsTheTemplateOfAnotherRouter(t *testing.T) {
 	}
 }
 
-func TestPathsOutsideTheResourceAndAPreflightPassUntouched(t *testing.T) {
+func TestPathsOutsideTheResourcePassUntouched(t *testing.T) {
 	api := newRESTAPI(t)
 	res := do(api.handler, "GET", "/health", "")
 	if res.Code != 200 || strings.TrimSpace(res.Body.String()) != `{"claims":false,"ok":true}` {
 		t.Fatalf("%d %s", res.Code, res.Body)
 	}
-	if res := do(api.handler, "OPTIONS", "/v1/orders/42", ""); res.Code == 401 {
-		t.Fatal("a preflight was refused")
+}
+
+// A route with no method in its pattern runs for every method, OPTIONS too.
+func TestOnlyACORSPreflightPassesWithNoToken(t *testing.T) {
+	var ran atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/admin/delete-all", func(w http.ResponseWriter, r *http.Request) {
+		ran.Add(1)
+		w.WriteHeader(204)
+	})
+	h := must(nethttp.TokenGuard(verifier(t, tk.Resource), metadata(t, tk.Resource)))(mux)
+	options := func(header map[string]string, auth string) int {
+		req := httptest.NewRequest("OPTIONS", "/v1/admin/delete-all", nil)
+		for name, value := range header {
+			req.Header.Set(name, value)
+		}
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	acrm, origin := "Access-Control-Request-Method", "https://app.example.com"
+	for _, c := range []struct {
+		name   string
+		header map[string]string
+	}{
+		{"no header", nil},
+		{"no Access-Control-Request-Method", map[string]string{"Origin": origin}},
+		{"no Origin", map[string]string{acrm: "DELETE"}},
+		{"X-HTTP-Method-Override", map[string]string{"Origin": origin, acrm: "DELETE", "X-HTTP-Method-Override": "GET"}},
+		{"X-HTTP-Method", map[string]string{"Origin": origin, acrm: "DELETE", "X-HTTP-Method": "GET"}},
+		{"X-Method-Override", map[string]string{"Origin": origin, acrm: "DELETE", "X-Method-Override": "GET"}},
+		{"an empty override", map[string]string{"Origin": origin, acrm: "DELETE", "X-HTTP-Method-Override": ""}},
+	} {
+		if code := options(c.header, ""); code != 401 {
+			t.Errorf("%s: %d", c.name, code)
+		}
+	}
+	if ran.Load() != 0 {
+		t.Fatal("the handler ran on an OPTIONS request with no token")
+	}
+	// A preflight passes to the handler, which stands for your CORS middleware.
+	if code := options(map[string]string{"Origin": origin, acrm: "DELETE"}, ""); code != 204 || ran.Load() != 1 {
+		t.Fatalf("a preflight: %d", code)
+	}
+	// Any other OPTIONS request with a token is authenticated, like any other method.
+	if code := options(nil, bearer(nil)); code != 204 || ran.Load() != 2 {
+		t.Fatalf("OPTIONS with a token: %d", code)
 	}
 }
 
@@ -315,6 +363,30 @@ func TestScopeGuardWithNoTokenGuardBeforeItFails(t *testing.T) {
 	mux.Handle("GET /v1/orders/{orderId}", nethttp.ScopeGuard(scopes, m)(http.NotFoundHandler()))
 	if res := do(mux, "GET", "/v1/orders/1", bearer(nil)); res.Code != 500 {
 		t.Fatal(res.Code)
+	}
+}
+
+func TestALoopbackHTTPIssuerBuildsAGuardForLocalDevelopment(t *testing.T) {
+	const issuer = "http://localhost:8080/realms/dev"
+	v := must(keelie.NewTokenVerifier(issuer, tk.Resource, tk.OrgID, nil))
+	m := must(keelie.NewProtectedResourceMetadata(tk.Resource, issuer, nil))
+	if _, err := nethttp.TokenGuard(v, m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := keelie.NewProtectedResourceMetadata(tk.Resource, "http://issuer.example.com/realms/dev", nil); err == nil {
+		t.Fatal("a plain http authorization server that is not loopback was taken")
+	}
+}
+
+func TestTheGuardsDoNotStartWhenTheVerifiersIssuerIsNotTheAuthorizationServer(t *testing.T) {
+	v := verifier(t, tk.Resource)
+	m := must(keelie.NewProtectedResourceMetadata(tk.Resource, "https://issuer.example.com/realms/other", nil))
+	if _, err := nethttp.TokenGuard(v, m); err == nil || !strings.Contains(err.Error(), "authorization server") {
+		t.Fatalf("TokenGuard started: %v", err)
+	}
+	r := must(keelie.NewUsageReporter(keelie.KeelieFunc(nil), nil))
+	if _, err := nethttp.MCPGuard(nethttp.MCPGuardOptions{Verifier: v, Metadata: m, Reporter: r}); err == nil {
+		t.Fatal("MCPGuard started")
 	}
 }
 

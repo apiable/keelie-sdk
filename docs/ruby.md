@@ -82,9 +82,9 @@ end
 
 What each line does:
 
-- `Keelie::Rack::TokenGuard` checks the token of every request under your address. It refuses a
-  missing or bad token with `401`, before Rails routes the request, and puts the claims in
-  `request.env["keelie.claims"]`.
+- `Keelie::Rack::TokenGuard` checks the token of every request under your address, except a CORS
+  preflight. It refuses a missing or bad token with `401`, before Rails routes the request, and
+  puts the claims in `request.env["keelie.claims"]`.
 - `keelie_scope_check` refuses a token that does not carry the scope of the route, with `403`.
 - `KEELIE_REPORTER.record` puts one usage event in memory and returns at once. A background thread
   sends the events to keelie every 5 seconds. `credits` is what the call costs the Consumer.
@@ -142,7 +142,7 @@ Keelie::TokenVerifier.new(issuer, audience, org_id, keys: nil, leeway_seconds: 3
 
 | Argument | Value |
 |---|---|
-| `issuer` | `issuer` from the signup answer: your own realm. |
+| `issuer` | `issuer` from the signup answer: your own realm. It must be `https`, with no user part. Plain `http` is accepted only on `localhost`, `127.0.0.1` or `[::1]`. Any other value raises `ArgumentError`. |
 | `audience` | Your API's address, the `resource` you registered. Every token carries it in `aud`. |
 | `org_id` | `id` from the signup answer. A value that is not a UUID raises `ArgumentError`. |
 | `keys` | The key set. Leave it out in production. Give one in tests (see [Test with no network](#test-with-no-network)). |
@@ -181,8 +181,20 @@ network call.
 | `:offline` | No key in hand. Every token is refused. A new process is `:offline` until the first token fetches the key set. |
 
 The SDK fetches the key set on the first token, and again for a `kid` it does not know, at most
-once a minute. Every thread that finds the key set missing waits on one fetch. A fetch waits 5
-seconds at most.
+once a minute.
+
+- **Cold start.** With no key set in hand, every thread that needs one waits on one fetch. Each
+  thread gets the outcome of that fetch, also a failure. After a failed fetch, the SDK remembers
+  the failure for 5 seconds. In that time each token is refused at once, as `:keys_unavailable`,
+  and the issuer is not asked. After 5 seconds, the next token fetches again.
+- **No usable key.** A fetch that gives no usable signing key is a failed fetch. With keys in hand,
+  those keys stay and go on verifying. A set with at least one usable key replaces the old set,
+  so a rotation still retires the old keys.
+- **Time.** Each request of a fetch takes 5 seconds at most, in all: connect, a proxy's `CONNECT`
+  answer, send and the full answer. A cold fetch makes two requests, the discovery document and
+  then the key set. So a cold fetch takes 10 seconds at most.
+- **https.** The `jwks_uri` in the discovery document must be `https`, with the same `localhost`
+  exception as the issuer. Any other `jwks_uri` is a failed fetch.
 
 ### `Keelie::Claims`
 
@@ -234,7 +246,18 @@ config.middleware.use Keelie::Rack::TokenGuard, verifier: verifier, metadata: me
 | No Bearer token | `401`, `WWW-Authenticate: Bearer resource_metadata="..."` |
 | A token that does not verify | `401`, `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="..."`, an empty body. The same answer for every reason. |
 | A token that verifies | Your app, with the claims in `env["keelie.claims"]`. |
-| A path outside your address, or a CORS preflight (`OPTIONS`) | Your app, untouched. |
+| A path outside your address | Your app, untouched. |
+| A CORS preflight | Your app, untouched. Your own CORS middleware answers it. |
+| Any other `OPTIONS` request | The same as any other method: it needs a token. |
+
+A CORS preflight is an `OPTIONS` request with an `Origin` header and an
+`Access-Control-Request-Method` header. It must not carry `X-HTTP-Method-Override`,
+`X-HTTP-Method` or `X-Method-Override`. A framework can route a request with one of these headers
+as another method, so the guard checks its token. CORS middleware such as rack-cors hands an
+`OPTIONS` request with no `Origin` to your app, so the guard checks its token too. Your CORS
+middleware can run before or after the guard. Put it before the guard if a `401` must carry CORS
+headers. A Rails route with `via: :all`, a Roda `r.is` with no verb, or a plain Rack app runs on
+`OPTIONS` too. The guard checks the token of each such `OPTIONS` request.
 
 It does not check the scope. Middleware runs before the router, so it cannot see the route
 template. Check the scope in each route.
@@ -249,8 +272,13 @@ never less. A path longer than 256 bytes with an escape, a dot, a backslash or a
 or one that does not start with a slash, needs a token wherever it points: the guard does not spend
 the time to make its forms.
 
+The guard checks only the paths under your address. Your app must see the same path as the
+public `resource`. A proxy or a gateway that strips the prefix, such as `/v1`, leaves every route
+unguarded. If your gateway strips the prefix, register the address that your app sees.
+
 The verifier's `audience` must be the `resource` of the metadata, or the guard raises
-`ArgumentError` when it is made.
+`ArgumentError` when it is made. In the same way, the verifier's `issuer` must be the
+`authorization_server` of the metadata.
 
 ## `Keelie::Rails::ScopeCheck`
 
@@ -324,10 +352,15 @@ It reads the body once, checks it, and hands the very bytes it checked to your s
 | A `tools/call` whose `params.name` is not a string | `400`, `-32602` |
 | A body over `max_body_bytes` | `413`, `-32600` |
 | `GET`, `HEAD` or `DELETE` | Your server. |
-| Any other method | `405`, `Allow: GET, POST, DELETE` |
+| A CORS preflight | Your server, with no token, as for `TokenGuard`. |
+| Any other method, `OPTIONS` included | `405`, `Allow: GET, POST, DELETE`, after the token check |
 
 The event carries `client_id` = `azp` and the token's `consumer_id`, and no `credits`. Token
-refusals are the same as for `TokenGuard`.
+refusals, the CORS preflight and the path rules are the same as for `TokenGuard`.
+
+> **Warning:** the guard counts a tool call when your server answers with an HTTP `2xx` status.
+> It does not read the answer. A JSON-RPC error, or a result with `isError: true`, inside an HTTP
+> `200` is counted as usage.
 
 ---
 
@@ -338,7 +371,9 @@ Keelie::ProtectedResourceMetadata.new(resource, authorization_server, scopes_sup
 ```
 
 `resource` is your API's address, exactly as registered: `https`, a lowercase host, no user,
-query, fragment or final slash. `authorization_server` is your issuer. `scopes_supported` is
+query, fragment or final slash. `authorization_server` is your issuer, with the same rules. Plain
+`http` is accepted for it only on `localhost`, `127.0.0.1` or `[::1]`, as for the verifier's
+`issuer`. `scopes_supported` is
 published only if you give it. Raises `ArgumentError` for an address that breaks these rules, or a
 scope list that is one string.
 
@@ -348,6 +383,7 @@ scope list that is one string.
 | `url` | The full address of the metadata, from the configuration, never from the request's `Host`. |
 | `document` | The JSON document, as served. |
 | `challenge(error = nil)` | The `WWW-Authenticate` value. Give `"invalid_token"` or `"insufficient_scope"` for a refusal you answer yourself. |
+| `authorization_server` | The issuer, as you gave it. The guards compare it with the verifier's `issuer`. |
 | `protects?(path)` | `true` for the path of `resource` and every path under it. |
 
 ## `Keelie::AiCatalog`
@@ -360,9 +396,14 @@ Rails.application.config.middleware.use Keelie::Rack::AiCatalog, catalog: catalo
 Serves your AI Catalog at `/.well-known/ard.json` (`application/json`) and
 `/.well-known/ai-catalog.json` (`application/ai-catalog+json`), with no token, as in Python. Both
 paths serve one body. It fetches the catalog from keelie with your SDK credential and keeps it for
-60 seconds. One fetch serves every request that arrives while it runs. If keelie does not answer
-when the copy is old, the answer is `503` with `Retry-After: 10` and `Cache-Control: no-store`,
-never an old catalog, and keelie is asked again after 10 seconds.
+60 seconds. One fetch serves every request that arrives while it runs. Each of these requests
+waits for that fetch and gets its outcome, also a failure. If keelie does not answer when the copy
+is old, the answer is `503` with `Retry-After: 10` and `Cache-Control: no-store`, never an old
+catalog, and keelie is asked again after 10 seconds.
+
+The fetch runs on the thread of the request that needs it. Each request it sends takes the
+`timeout_seconds` of the `SdkCredential` at most, in all. A fetch that must mint a token sends two
+requests, and a `401` from keelie adds two more.
 
 Made with the metadata, it tells the guards to let a `GET` or a `HEAD` of its two paths pass with
 no token. Any other method on those paths is guarded like any other path. The order of the
@@ -421,11 +462,20 @@ Starts the background thread. The first `record` starts it too.
 Stops the thread, and sends what is left, once. A batch already on its way finishes first. What it
 cannot send in `timeout` seconds is lost, with one log line. It never raises.
 
+On a serverless platform, such as AWS Lambda, call `close` before each invocation ends. The
+platform can freeze or stop the process after the invocation. Events that wait in memory are then
+lost.
+
 ### What happens to a batch
 
 As in Python. A network error, a `401`, `408`, `409`, `429` or a `5xx` keeps the batch, and it is
 sent again after one interval with the same `Idempotency-Key` and the same body. Any other answer
 drops it, with a log line. When the buffer is full, the oldest event goes.
+
+A `401` or a `409` can repeat for ever, for example for a credential that keelie refuses. So a
+batch gets 5 of these answers at most, in all. Then the SDK drops it, with
+`apiable.usage_dropped events=N reason=refused status=...`. A network error or a `5xx` does not
+count toward the 5.
 
 ## `Keelie::SdkCredential`
 
@@ -438,6 +488,12 @@ client credentials grant, keeps it until shortly before it expires (30 seconds b
 lifetime for a short one), and mints again and retries once on a `401`. Threads that find the token
 stale wait on one mint. This is what the Python quickstart's `SdkCredential` class does; in Ruby it
 is part of the gem.
+
+The secret goes to `token_url`, and the token goes to `keelie_url`. Both must be `https`, with no
+user part. Plain
+`http` is accepted only on `localhost`, `127.0.0.1` or `[::1]`, for local development. Any other
+value raises `ArgumentError`. `timeout_seconds` is the time one request may take, in all: connect,
+send and the full answer.
 
 ---
 
@@ -459,7 +515,7 @@ Any object with `debug`, `info` and `warn` fits.
 | `apiable.token_rejected reason=...` | info | A token did not verify. |
 | `apiable.scope_refused` | info | A token did not carry the scope of a route. |
 | `apiable.keys_loaded` | info | The SDK fetched the issuer's key set. |
-| `apiable.keys_unavailable` | warn | The SDK holds no key set and could not fetch one. Every token is refused. |
+| `apiable.keys_unavailable` | warn | The SDK holds no key set and could not fetch one. The token is refused. One line for each refused token, also in the 5 seconds after a failed fetch. |
 | `apiable.keys_not_refreshed` | warn | A fetch failed. The keys in hand go on verifying. |
 | `apiable.key_skipped` | warn | The SDK could not load one key of the set, or the key is under 2048 bits. The rest of the set loads. Only a key's public part is read, so a key published with its private part still loads. |
 | `apiable.mcp_refused` | info | `McpGuard` refused a request. |
@@ -467,7 +523,7 @@ Any object with `debug`, `info` and `warn` fits.
 | `apiable.usage_sent` | debug | keelie took a batch. |
 | `apiable.usage_not_sent` | warn | A batch failed and waits for a retry. |
 | `apiable.usage_flush_failed` | warn | The background thread met an error. It sends again after one interval. |
-| `apiable.usage_dropped` | warn | Events were lost: refused by keelie, buffer full, or not sent at shutdown. |
+| `apiable.usage_dropped` | warn | Events were lost: refused by keelie, 5 answers of `401` or `409` (`reason=refused`), buffer full, or not sent at shutdown. |
 | `apiable.catalog_fetch_failed` | warn | The SDK could not fetch the catalog. |
 
 ## Test with no network
