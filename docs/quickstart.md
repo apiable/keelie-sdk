@@ -47,11 +47,11 @@ The answer holds your org and two credentials.
 > **Caution:** keelie shows each client secret in this answer only. It cannot show a secret again.
 > Store both secrets now, then delete `signup.json`.
 
-## 2. Register the address of your API
+## 2. Register your API, with its address
 
-keelie writes the address of your API into the `aud` claim of every Consumer token. The SDK
-refuses a token that names another address. Use the exact address that a client calls, path
-included, with no final slash.
+keelie writes the address of your API into the `aud` claim of every token of a Consumer of this
+product. The SDK refuses a token that names another address. Use the exact address that a client
+calls, path included, with no final slash. Each product has its own address.
 
 ```bash
 ADMIN_ID=$(jq -r .credential.client_id signup.json)
@@ -60,13 +60,15 @@ ORG_ID=$(jq -r .id signup.json)
 ADMIN_TOKEN=$(curl -s -u "$ADMIN_ID:$ADMIN_SECRET" -d grant_type=client_credentials \
   $TOKEN_URL | jq -r .access_token)
 
-curl -s -X PATCH $KEELIE/orgs/$ORG_ID \
+curl -s -X POST $KEELIE/products \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H 'Content-Type: application/merge-patch+json' \
-  -d '{"resource": "https://api.portal-labs.example/v1"}' | jq .resource
+  -H 'Content-Type: application/json' \
+  -d '{"type": "api", "url": "https://api.portal-labs.example/v1/openapi.json", "resource": "https://api.portal-labs.example/v1"}' \
+  | jq '{id, resource}'
 ```
 
-keelie issues no Consumer credential before you set this address.
+keelie publishes no plan of the product, and issues no Consumer credential on it, before you set
+this address. You can set it later with `PATCH /products/{productId}`.
 
 ## 3. Install the SDK
 
@@ -88,7 +90,7 @@ from source code.
 | `KEELIE_TOKEN_URL` | `$TOKEN_URL` from step 1 |
 | `KEELIE_ISSUER` | `issuer` from the signup answer |
 | `KEELIE_ORG_ID` | `id` from the signup answer |
-| `KEELIE_RESOURCE` | The address of your API from step 2 |
+| `KEELIE_RESOURCE` | The address of this product from step 2. Each server uses the address of its own product. |
 | `KEELIE_SDK_CLIENT_ID`, `KEELIE_SDK_CLIENT_SECRET` | `sdk_credential` from the signup answer |
 
 The SDK takes an `httpx.AsyncClient` to talk to keelie. The SDK holds no secret of its own, so the
@@ -98,8 +100,12 @@ expires, and mints again on a `401`. Copy it as it is.
 ```python
 # keelie_auth.py
 import time
+import uuid
 
 import httpx
+import jwt
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 
 class SdkCredential(httpx.Auth):
@@ -109,13 +115,47 @@ class SdkCredential(httpx.Auth):
 
     def __init__(self, token_url: str, client_id: str, client_secret: str) -> None:
         self._token_url = token_url
-        self._form = {
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
-        }
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._signer = None
         self._token = ""
         self._expires_at = 0.0
+
+    @classmethod
+    def from_private_key(
+        cls, token_url: str, client_id: str, key_file: str, audience: str, kid: str = "k1"
+    ) -> "SdkCredential":
+        """Signs in with a key pair, with no secret. audience is the issuer of token_url."""
+        with open(key_file, "rb") as file:
+            key = load_pem_private_key(file.read(), password=None)
+        if isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1):
+            algorithm = "ES256"
+        elif isinstance(key, rsa.RSAPrivateKey) and key.key_size >= 2048:
+            algorithm = "RS256"
+        else:
+            raise ValueError("the key must be EC P-256, or RSA of 2048 bits or more")
+        credential = cls(token_url, client_id, "")
+        credential._signer = (key, algorithm, kid, audience)
+        return credential
+
+    def _form(self) -> dict:
+        form = {"grant_type": "client_credentials", "client_id": self._client_id}
+        if self._signer is None:
+            form["client_secret"] = self._client_secret
+            return form
+        key, algorithm, kid, audience = self._signer
+        now = int(time.time())
+        claims = {
+            "iss": self._client_id,
+            "sub": self._client_id,
+            "aud": audience,
+            "jti": str(uuid.uuid4()),  # new for each mint: the issuer refuses a replay
+            "iat": now,
+            "exp": now + 60,
+        }
+        form["client_assertion_type"] = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+        form["client_assertion"] = jwt.encode(claims, key, algorithm, headers={"kid": kid})
+        return form
 
     def auth_flow(self, request):
         if time.monotonic() >= self._expires_at:
@@ -128,7 +168,7 @@ class SdkCredential(httpx.Auth):
             yield request
 
     def _mint(self):
-        response = yield httpx.Request("POST", self._token_url, data=self._form)
+        response = yield httpx.Request("POST", self._token_url, data=self._form())
         response.raise_for_status()
         body = response.json()
         self._token = body["access_token"]
@@ -136,6 +176,47 @@ class SdkCredential(httpx.Auth):
         lifetime = body["expires_in"]
         self._expires_at = time.monotonic() + max(lifetime - 30, lifetime / 2)
 ```
+
+### Sign in with a key pair instead of a secret
+
+With a key pair, your application holds no secret of keelie. keelie keeps the public key only.
+Make an EC P-256 key, and give keelie its public key set:
+
+```bash
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out keelie-sdk.pem
+chmod 600 keelie-sdk.pem
+python -c 'import json; from jwt.algorithms import ECAlgorithm as A
+from cryptography.hazmat.primitives.serialization import load_pem_private_key as load
+key = load(open("keelie-sdk.pem", "rb").read(), None).public_key()
+print(json.dumps({"jwks": {"keys": [{**json.loads(A.to_jwk(key)), "kid": "k1", "alg": "ES256", "use": "sig"}]}}))' > jwks.json
+
+curl -s -X POST $KEELIE/orgs/$ORG_ID/credentials \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Idempotency-Key: $(python -c 'import uuid; print(uuid.uuid4())')" \
+  -H 'Content-Type: application/json' \
+  -d @jwks.json | jq '{id, client_id, auth_type}'
+
+curl -s $KEELIE/realms/keelie/.well-known/openid-configuration | jq -r .issuer
+```
+
+The answer has `"auth_type": "private_key_jwt"` and no secret. Put its `client_id` in
+`KEELIE_SDK_CLIENT_ID`, the path of `keelie-sdk.pem` in `KEELIE_SDK_KEY_FILE`, and the `issuer`
+from the last command in `KEELIE_SDK_AUDIENCE`. Then make the `SdkCredential` in step 5 like this:
+
+```python
+auth=SdkCredential.from_private_key(
+    env["KEELIE_TOKEN_URL"],
+    env["KEELIE_SDK_CLIENT_ID"],
+    env["KEELIE_SDK_KEY_FILE"],
+    env["KEELIE_SDK_AUDIENCE"],
+),
+```
+
+For each mint, it signs a new assertion that is valid for 60 seconds. An RSA key of 2048 bits or
+more works too. When it works, revoke the SDK credential from the signup answer, which has a
+secret: `GET /orgs/{orgId}/credentials` lists it, and `POST /credentials/{credentialId}:revoke`
+revokes it. To change the key, issue a new credential with the new key, deploy it, then revoke the
+old one.
 
 ## 5. Protect a route
 
@@ -228,7 +309,7 @@ address to find your issuer.
 A Consumer needs a credential of their own first. Make it with `$ADMIN_TOKEN`, in this order. The
 [keelie API](#the-keelie-contract) gives the body of each call.
 
-1. `POST /products`: your API.
+1. `POST /products`: your API. You made it in step 2.
 2. `POST /products/{productId}/plans`: a plan that grants the scope `orders:read`. Then
    `POST /plans/{planId}:publish`. A free plan needs no payment setup.
 3. `POST /subjects`: the Consumer.
