@@ -121,11 +121,25 @@ final class MiddlewareTest extends TestCase
         self::assertNotNull($app->request);
     }
 
+    public function testARealPreflightUnderTheResourcePassesUntouched(): void
+    {
+        $app = new App();
+        $request = Support::request('OPTIONS', 'https://api.example.com/v1/orders/1')
+            ->withHeader('Origin', 'https://app.example.com')
+            ->withHeader('Access-Control-Request-Method', 'DELETE');
+        $response = self::through($request, $app, $this->guard);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame($request, $app->request);
+    }
+
     public function testPathsOutsideTheResourceAndAPreflightPassUntouched(): void
     {
         foreach ([['GET', '/health'], ['GET', '/v10'], ['OPTIONS', '/v1/orders']] as [$method, $path]) {
             $app = new App();
-            $request = Support::request($method, "https://api.example.com{$path}")->withHeader('Access-Control-Request-Method', 'GET');
+            $request = Support::request($method, "https://api.example.com{$path}")
+                ->withHeader('Origin', 'https://app.example.com')
+                ->withHeader('Access-Control-Request-Method', 'GET');
             $response = self::through($request, $app, $this->guard);
             self::assertSame(200, $response->getStatusCode(), "{$method} {$path}");
             self::assertNull($app->request?->getAttribute(Guard::CLAIMS_ATTRIBUTE));
@@ -135,9 +149,13 @@ final class MiddlewareTest extends TestCase
     /** @return iterable<string, array{string, string, array<string, string>}> */
     public static function notPreflights(): iterable
     {
+        $origin = 'https://app.example.com';
         yield 'an OPTIONS with no preflight header' => ['OPTIONS', '/v1/orders/1', []];
-        yield 'a preflight that overrides its method' => ['OPTIONS', '/v1/orders/1', ['Access-Control-Request-Method' => 'GET', 'X-HTTP-Method-Override' => 'DELETE']];
-        yield 'another override header' => ['OPTIONS', '/v1/orders/1', ['Access-Control-Request-Method' => 'GET', 'X-Method-Override' => 'PUT']];
+        yield 'an OPTIONS with no Origin' => ['OPTIONS', '/v1/orders/1', ['Access-Control-Request-Method' => 'GET']];
+        yield 'an OPTIONS with no Access-Control-Request-Method' => ['OPTIONS', '/v1/orders/1', ['Origin' => $origin]];
+        yield 'a preflight that overrides its method' => ['OPTIONS', '/v1/orders/1', ['Origin' => $origin, 'Access-Control-Request-Method' => 'GET', 'X-HTTP-Method-Override' => 'DELETE']];
+        yield 'a preflight with an override to OPTIONS' => ['OPTIONS', '/v1/orders/1', ['Origin' => $origin, 'Access-Control-Request-Method' => 'GET', 'X-HTTP-Method' => 'OPTIONS']];
+        yield 'another override header' => ['OPTIONS', '/v1/orders/1', ['Origin' => $origin, 'Access-Control-Request-Method' => 'GET', 'X-Method-Override' => 'PUT']];
     }
 
     /** @param array<string, string> $headers */

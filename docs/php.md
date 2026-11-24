@@ -350,8 +350,12 @@ $app->add(new TokenGuard($verifier, $metadata, $responseFactory));
 | A token that does not verify | `401`, `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="..."`, an empty body. The same answer for every reason. |
 | A token that verifies | Your app, with the claims in the request attribute `keelie.claims`. |
 | A path outside your address | Your app, untouched. |
-| A CORS preflight: `OPTIONS` with an `Access-Control-Request-Method` header | Your app, untouched. Your CORS middleware answers it. |
+| A CORS preflight: `OPTIONS` with an `Origin` and an `Access-Control-Request-Method` header, and no method override header | Your app, untouched. Your CORS middleware answers it. |
 | Any other `OPTIONS` | A token is needed, as for every other method. |
+
+An `OPTIONS` request needs a token too, unless it is a CORS preflight. A preflight has an `Origin`
+header and an `Access-Control-Request-Method` header. It has no method-override header, such as
+`X-HTTP-Method-Override`. The guard passes a preflight untouched. Your CORS middleware answers it.
 
 A framework can read the method from a header: Slim's `MethodOverrideMiddleware` and Symfony do.
 So the guard reads `X-HTTP-Method-Override`, `X-HTTP-Method` and `X-Method-Override` too. A request
@@ -616,7 +620,6 @@ key, or with `exp` in the past.
 | A batch that fails | Sent again after one interval | The same in a worker. Under PHP-FPM, dropped when the request ends, with a log line. With a cache, the other processes drop their events for one interval and do not wait on keelie. |
 | The send at shutdown | `await aclose()` waits up to 10 seconds | Under PHP-FPM, 2 seconds at most, after the response. Under another server API, the client waits for it. |
 | Two `Authorization` headers | The first is verified | `401`, as with no token: your app could read the other one |
-| An `OPTIONS` request | Passes with no token | Passes only as a CORS preflight, with `Access-Control-Request-Method`. Any other needs a token. |
 | A method override header, such as `X-HTTP-Method-Override` | Not read | Read. A request passes with no token only if it passes as each method it names. `McpGuard` reads an override to `POST` as a `POST`. |
 | A `HEAD` of a route | Checked against the map's `HEAD` entry | `ScopeGuard` checks it as a `GET` when the map has no `HEAD` entry |
 | Amounts | `int` or `Decimal`. `Decimal("1.50")` is sent as `"1.50"`. A `float` is refused. | `int`, `float` or `string`. `'1.50'` is sent as `"1.50"`. A `float` is taken when it has six places at most, whatever `precision` and `serialize_precision` say in php.ini. |

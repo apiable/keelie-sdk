@@ -27,8 +27,10 @@ use Psr\Http\Server\RequestHandlerInterface;
  * and refuses a request with no token with 401 and
  * `WWW-Authenticate: Bearer resource_metadata="..."`, so an agent can find your
  * issuer. Paths outside `resource` and a CORS preflight pass untouched. A CORS
- * preflight is an OPTIONS request with an `Access-Control-Request-Method` header.
- * Any other OPTIONS request needs a token.
+ * preflight is an OPTIONS request with an `Origin` header and an
+ * `Access-Control-Request-Method` header, and with no method override header. Any
+ * other OPTIONS request needs a token: a CORS middleware can pass an OPTIONS with
+ * no `Origin` on to your app.
  *
  * A framework can read the method from a header, such as Slim's
  * `MethodOverrideMiddleware` and Symfony do. So the guard reads those headers too
@@ -87,7 +89,7 @@ abstract class Guard implements MiddlewareInterface
         $methods = self::methods($request);
         $path = $request->getUri()->getPath();
         $path = $path === '' ? '/' : $path;
-        if ($methods === ['OPTIONS'] && $request->hasHeader('Access-Control-Request-Method')) {
+        if (self::isPreflight($request)) {
             // A CORS preflight carries no token, and your CORS middleware answers it.
             return $handler->handle($request);
         }
@@ -118,6 +120,27 @@ abstract class Guard implements MiddlewareInterface
         }
 
         return $this->handle($claims, $request->withAttribute(self::CLAIMS_ATTRIBUTE, $claims), $handler);
+    }
+
+    /**
+     * True for a CORS preflight: an OPTIONS with an `Origin` and an
+     * `Access-Control-Request-Method` header, and no method override header.
+     */
+    private static function isPreflight(ServerRequestInterface $request): bool
+    {
+        if ($request->getMethod() !== 'OPTIONS') {
+            return false;
+        }
+        if (!$request->hasHeader('Origin') || !$request->hasHeader('Access-Control-Request-Method')) {
+            return false;
+        }
+        foreach (self::METHOD_OVERRIDE_HEADERS as $name) {
+            if ($request->hasHeader($name)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
