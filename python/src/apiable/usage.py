@@ -27,6 +27,9 @@ A report that fails never stops a request:
 - A network error, a ``401``, ``408``, ``409``, ``429`` or a ``5xx`` keeps the
   batch. The task sends it again after one interval. It does not read
   ``Retry-After``.
+- A batch that keelie answers with ``401`` or ``409`` 5 times is dropped, with a
+  log line: ``apiable.usage_dropped events=<n> reason=refused``. Such a batch
+  would otherwise block the buffer for good.
 - Any other answer drops the batch, with a log line. A retry gets the same
   answer. ``usage-out-of-range`` is one of these: the batch would take a counter
   or a balance past the largest value keelie keeps.
@@ -36,7 +39,10 @@ keelie refuses an event older than the start of the previous month. After an
 outage that long, a batch that holds such an event is dropped.
 
 Nothing is written to disk. :meth:`UsageReporter.aclose` sends what is left at
-shutdown. Events it cannot send in time are lost, with a log line.
+shutdown. Events it cannot send in time are lost, with a log line. On a
+serverless platform, such as AWS Lambda with Mangum, await ``aclose()`` before
+the invocation ends. The platform freezes or ends the process after it, and the
+events in the buffer are lost.
 """
 
 from __future__ import annotations
@@ -84,6 +90,10 @@ CLOSE_TIMEOUT_SECONDS = 10.0
 # The answers that can change on a retry. Every other failure drops the batch. A
 # ``401`` is one: the client's auth fetches a new token for the next try.
 _RETRY_STATUSES = frozenset({401, 408, 409, 429})
+# A ``401`` or a ``409`` can also never change: a credential that may not report, or a
+# key keelie holds with another body. After this many such answers the batch is dropped.
+_REFUSED_STATUSES = frozenset({401, 409})
+MAX_REFUSED_SENDS = 5
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _PROBLEM_CODE = re.compile(r"[a-z0-9-]{1,64}")
@@ -123,6 +133,8 @@ class UsageReporter:
         self._events: deque[_EventBody] = deque(maxlen=max_buffered_events)
         # The batch on its way, kept as sent: a retry repeats its key and its body.
         self._pending: tuple[str, bytes, int] | None = None
+        # How often keelie answered the pending batch with a 401 or a 409.
+        self._refusals = 0
         self._dropped = 0
         self._closed = False
         # Made inside the running event loop: on Python 3.9 an event made outside
@@ -277,6 +289,7 @@ class UsageReporter:
             while self._pending is not None or self._events:
                 if self._pending is None:
                     self._pending = self._next_batch()
+                    self._refusals = 0
                 if not await self._send(*self._pending):
                     return False
                 self._pending = None
@@ -306,6 +319,13 @@ class UsageReporter:
         if response.is_success:
             logger.debug("apiable.usage_sent events=%d", count)
             return True
+        if status in _REFUSED_STATUSES:
+            self._refusals += 1
+            if self._refusals >= MAX_REFUSED_SENDS:
+                logger.warning(
+                    "apiable.usage_dropped events=%d reason=refused status=%d", count, status
+                )
+                return True
         if status in _RETRY_STATUSES or status >= 500:
             logger.warning("apiable.usage_not_sent events=%d status=%d", count, status)
             return False

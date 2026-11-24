@@ -45,6 +45,11 @@ public sealed class SdkCredentialOptions
 /// or <see cref="HttpClientHandler"/>, the primary handler of a named client from
 /// <c>IHttpClientFactory</c> too. This handler refuses to send through one that follows redirects.
 /// </para>
+/// <para>
+/// The secret and the token go over https only. The token URL, keelie's URL and the address of each
+/// request must be https. Plain http is allowed only to <c>localhost</c>, <c>127.0.0.1</c> and
+/// <c>[::1]</c>, for local development.
+/// </para>
 /// </remarks>
 public sealed class SdkCredential : DelegatingHandler
 {
@@ -60,6 +65,7 @@ public sealed class SdkCredential : DelegatingHandler
     private Task? _minting;
 
     /// <summary>A handler that adds a token of the credential in <paramref name="options"/> to each request.</summary>
+    /// <exception cref="ArgumentException">The token URL is not https, and not http to a loopback host.</exception>
     public SdkCredential(SdkCredentialOptions options)
         : this(options, TimeProvider.System)
     {
@@ -69,7 +75,7 @@ public sealed class SdkCredential : DelegatingHandler
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.Timeout, TimeSpan.Zero, nameof(options));
-        _tokenUrl = new Uri(options.TokenUrl, UriKind.Absolute);
+        _tokenUrl = KeelieHttp.RequireSecure(options.TokenUrl, nameof(options.TokenUrl));
         _form = new Dictionary<string, string>
         {
             ["grant_type"] = "client_credentials",
@@ -85,15 +91,17 @@ public sealed class SdkCredential : DelegatingHandler
     /// request, and the timeout in <paramref name="options"/>. Give it to <see cref="UsageReporter"/>
     /// and <see cref="AiCatalog"/>. Make one for the process.
     /// </summary>
+    /// <exception cref="ArgumentException">keelie's URL or the token URL is not https, and not http to a loopback host.</exception>
     public static HttpClient CreateClient(SdkCredentialOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        var keelie = KeelieHttp.RequireSecure(options.KeelieUrl, nameof(options.KeelieUrl));
         // No redirect is followed: a 307 or 308 from the token endpoint would send the secret on.
         var inner = new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionLifetime = TimeSpan.FromMinutes(5) };
         var handler = new SdkCredential(options) { InnerHandler = inner };
         return new HttpClient(handler, disposeHandler: true)
         {
-            BaseAddress = new Uri(options.KeelieUrl, UriKind.Absolute),
+            BaseAddress = keelie,
             Timeout = options.Timeout,
         };
     }
@@ -106,6 +114,11 @@ public sealed class SdkCredential : DelegatingHandler
         {
             throw new InvalidOperationException(
                 "the handler under SdkCredential follows redirects, which would send the client secret to another address: set AllowAutoRedirect = false on it");
+        }
+        if (!KeelieHttp.IsSecure(request.RequestUri))
+        {
+            // The token goes over https only, or to a loopback host in local development.
+            throw new InvalidOperationException("SdkCredential sends its token over https only, or plain http to localhost, 127.0.0.1 or [::1]");
         }
         await FreshAsync(force: false, cancellationToken).ConfigureAwait(false);
         if (request.Content is not null)

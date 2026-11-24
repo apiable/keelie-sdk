@@ -35,14 +35,15 @@ public sealed class ProtectedResourceMetadata
     /// only if you give it.
     /// </summary>
     /// <exception cref="ArgumentException">
-    /// An address is not https, has no host, has a user, a query, a fragment or a final slash, or an
+    /// An address is not https (the authorization server may be http to a loopback host), has no host, has a user, a query, a fragment or a final slash, or an
     /// uppercase scheme or host; or a scope is not exactly one scope, or holds a lone surrogate.
     /// </exception>
     public ProtectedResourceMetadata(string resource, string authorizationServer, IEnumerable<string>? scopesSupported = null)
     {
         var parts = HttpsUrl("resource", resource);
-        var issuer = HttpsUrl("authorizationServer", authorizationServer).Url;
+        var issuer = AuthorizationServerUrl(authorizationServer);
         Resource = parts.Url;
+        AuthorizationServer = issuer;
         // The well-known name goes between the host and the path (RFC 9728 section 3.1).
         PathPrefix = parts.Path is "" or "/" ? string.Empty : parts.Path.TrimEnd('/');
         Path = WellKnown + PathPrefix;
@@ -78,6 +79,9 @@ public sealed class ProtectedResourceMetadata
 
     /// <summary>Your API's address, as given.</summary>
     public string Resource { get; }
+
+    /// <summary>The one issuer that mints tokens for <see cref="Resource"/>, as given.</summary>
+    public string AuthorizationServer { get; }
 
     /// <summary>Where the metadata is served on your host, such as <c>/.well-known/oauth-protected-resource/v1</c>.</summary>
     public string Path { get; }
@@ -134,6 +138,29 @@ public sealed class ProtectedResourceMetadata
         var scheme = at < 0 ? value : value[..at];
         var token = at < 0 ? string.Empty : Compat.Strip(value[(at + 1)..]);
         return scheme.Equals("bearer", StringComparison.OrdinalIgnoreCase) && token.Length > 0 ? token : null;
+    }
+
+    /// <summary>
+    /// The issuer, with the rule of <see cref="HttpsUrl"/>. Plain http is taken too, but only to
+    /// <c>localhost</c>, <c>127.0.0.1</c> or <c>[::1]</c>: the same rule as for
+    /// <see cref="TokenVerifier"/>, so a guard can run against a local issuer.
+    /// </summary>
+    private static string AuthorizationServerUrl(string? value)
+    {
+        const string Http = "http://";
+        if (value is null || !value.StartsWith(Http, StringComparison.Ordinal))
+        {
+            return HttpsUrl("authorizationServer", value).Url;
+        }
+        // The same shape as an https URL, checked on the same text with the scheme swapped.
+        HttpsUrl("authorizationServer", "https://" + value[Http.Length..]);
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || !KeelieHttp.IsSecure(uri))
+        {
+            throw new ArgumentException(
+                $"authorizationServer must be https, or http to localhost, 127.0.0.1 or [::1]: {JsonSerializer.Serialize(value)}",
+                "authorizationServer");
+        }
+        return value;
     }
 
     /// <summary>

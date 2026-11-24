@@ -74,6 +74,37 @@ function httpsUrl(name: string, value: unknown): { url: string; netloc: string; 
   return { url: value, netloc, path };
 }
 
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * @internal Throws `TypeError` unless `value` is an https URL with a host and no
+ * user. The SDK sends a secret, or trusts what comes back, at each such URL: the
+ * issuer, the `jwks_uri` of its discovery document, the token endpoint and keelie.
+ *
+ * Plain http is taken only for a loopback host (`localhost`, `127.0.0.1` or
+ * `[::1]`), for local development. Nothing leaves the machine there.
+ */
+export function requireHttps(name: string, value: unknown): string {
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value)) {
+    throw new TypeError(`${name} must be an https URL: ${JSON.stringify(value)}`);
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new TypeError(`${name} is not a URL: ${JSON.stringify(value)}`);
+  }
+  if (url.hostname === "" || url.username !== "" || url.password !== "") {
+    throw new TypeError(`${name} must have a host and no user: ${JSON.stringify(value)}`);
+  }
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname))) {
+    throw new TypeError(
+      `${name} must be https; plain http is taken for a loopback host only: ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
 export interface ProtectedResourceMetadataOptions {
   /** Published only if you give it. */
   scopesSupported?: Iterable<string>;
@@ -84,11 +115,14 @@ export interface ProtectedResourceMetadataOptions {
  *
  * `resource` is the URL an agent types for your API, exactly, path included.
  * The metadata repeats it as it is. `authorizationServer` is the issuer, the
- * same value you give `TokenVerifier`. It is one issuer: an agent uses the first
+ * same value you give `TokenVerifier`, by the same rule: https, or plain http on
+ * a loopback host only. It is one issuer: an agent uses the first
  * and does not try a second.
  */
 export class ProtectedResourceMetadata {
   readonly resource: string;
+  /** The one issuer the metadata names. A guard refuses a verifier of another issuer. */
+  readonly authorizationServer: string;
   /** Where the metadata is served on your host, such as `/.well-known/oauth-protected-resource/v1`. */
   readonly path: string;
   /** The full URL of the metadata, from the configuration, never from the request's Host. */
@@ -108,8 +142,10 @@ export class ProtectedResourceMetadata {
     options: ProtectedResourceMetadataOptions = {},
   ) {
     const parts = httpsUrl("resource", resource);
-    const issuer = httpsUrl("authorizationServer", authorizationServer).url;
+    // The same rule as the verifier's issuer: https, or http on a loopback host.
+    const issuer = requireHttps("authorizationServer", authorizationServer);
     this.resource = parts.url;
+    this.authorizationServer = issuer;
     // The well-known name goes between the host and the path (RFC 9728 section 3.1).
     this.#prefix = parts.path === "" || parts.path === "/" ? "" : parts.path.replace(/\/+$/, "");
     this.path = WELL_KNOWN + this.#prefix;

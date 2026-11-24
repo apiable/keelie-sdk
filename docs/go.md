@@ -120,14 +120,17 @@ func main() {
 
 What each line does:
 
-- `TokenGuard` checks the token of every request under your address. It refuses a missing or bad
-  token with `401`, before your route runs, and puts the claims in the request's context.
+- `TokenGuard` checks the token of every request under your address, except a CORS preflight. It
+  refuses a missing or bad token with `401`, before your route runs, and puts the claims in the
+  request's context.
 - `ScopeGuard` refuses a token that does not carry the scope of the route, with `403`.
 - `reporter.Record` puts one usage event in memory and returns at once. A goroutine sends the
   events to keelie every 5 seconds. `Credits` is what the call costs the Consumer. `ConsumerID`
   names the Consumer on a token for a person, whose `AZP` is an agent's client. On a credential's
   token it is `""`.
-- `reporter.Close` sends what is left when the process stops.
+- `reporter.Close` sends what is left when the process stops. The events wait in memory until then.
+  On a serverless platform, call `reporter.Close` before the invocation ends, or the events are
+  lost.
 
 Then check it as in steps 6 and 7 of the quickstart.
 
@@ -170,6 +173,11 @@ type TokenVerifierOptions struct {
 | `audience` | Your API's address, the `resource` you registered. Every token carries it in `aud`. |
 | `orgID` | `id` from the signup answer. A value that is not a UUID is an error. |
 
+`issuer` must be `https`. Plain `http` is allowed only for `localhost`, `127.0.0.1` and `[::1]`,
+for local development. A URL with a user, such as `https://user@host`, is refused. Any other
+`issuer` is an error. `verifier.Issuer()` and
+`verifier.Audience()` give the two values back.
+
 ### `verifier.Verify(ctx context.Context, token string) (*keelie.Claims, error)`
 
 The error is a `*keelie.TokenRejected` for every token that does not verify. Its `Reason` is one of
@@ -196,7 +204,26 @@ the same as in Python:
 
 `ctx` bounds the wait for the key set, which is fetched on a cold start and for a key the SDK does
 not know. If `ctx` ends first, the token is refused with `keys_unavailable`. The fetch goes on for
-the next caller.
+the next caller. A `net/http` request context has no deadline, so the limits below bound the wait.
+
+### The key set
+
+The SDK fetches the issuer's discovery document, then the key set at its `jwks_uri`.
+
+- **A cold start.** With no key set in hand, all callers wait on one fetch. They share its outcome,
+  a failure too. A caller that waited on a failed fetch does not start its own.
+- **A deadline.** Each of the two requests has a total deadline of `keelie.FetchTimeout`, 5 seconds.
+  The deadline holds the whole request, the body included. A cold fetch takes 10 seconds at most.
+- **A failed cold fetch.** The SDK keeps the failure for `keelie.ColdRetryInterval`, 5 seconds. In
+  that window, every token is refused at once with `keys_unavailable`, and each refusal logs
+  `apiable.keys_unavailable`. The SDK does not ask the issuer. The first token after the window
+  fetches again.
+- **An unknown `kid`.** With a key set in hand, the SDK fetches again at most once a minute.
+- **An empty key set.** A key set with no usable signing key is a failed fetch. The keys in hand
+  stay, and go on verifying. The status becomes `degraded`. A set with at least one usable key
+  replaces the old set, so a rotation still retires the old key.
+- **https only.** The `jwks_uri` must be `https`, with the same exception for a loopback host as
+  the `issuer`. The SDK sends no request to any other URL.
 
 ### `verifier.Status() keelie.Status`
 
@@ -256,7 +283,9 @@ http.ListenAndServe(":3000", guard(mux))
 | No Bearer token | `401`, `WWW-Authenticate: Bearer resource_metadata="..."` |
 | A token that does not verify | `401`, `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="..."`, an empty body. The same answer for every reason. |
 | A token that verifies | Your handler runs. `nethttp.ClaimsFrom(r)` gives the claims. |
-| A path outside your address, or a CORS preflight (`OPTIONS`) | Your handler, untouched, with no claims. |
+| A path outside your address | Your handler, untouched, with no claims. |
+| A CORS preflight (see below) | Your handler, untouched, with no claims. |
+| Any other `OPTIONS` request | The same as any other method: a token is needed. |
 
 It compares the path in every form a router could route it by: as sent, with its escapes read
 (once and twice), with dot segments resolved and doubled slashes folded, and without case. So
@@ -264,11 +293,32 @@ It compares the path in every form a router could route it by: as sent, with its
 address is `/v1`. It can only guard more than your router serves, never less. The metadata and the
 AI Catalog paths pass with no token only as sent, exactly.
 
-The verifier's audience must be the `resource` of the metadata, or `TokenGuard` returns an error.
+The guard checks only the paths under the path of your `resource`, such as `/v1`. Your app must
+see the same path as the public `resource`. A proxy or a gateway that strips the prefix, such as
+`/v1`, leaves every route unguarded. Do not strip it in front of the guard.
 
-A preflight reaches your handler with no claims. Register each route with its method, such as
-`GET /v1/orders/{orderId}`, so that a preflight never reaches it. A route registered with no method
-gets `500` from `ScopeGuard` on a preflight, because it has no claims to check.
+The verifier's audience must be the `resource` of the metadata, or `TokenGuard` returns an error.
+The verifier's issuer must be the `authorizationServer` of the metadata, exactly, or `TokenGuard`
+returns an error. The agent gets its token from that issuer.
+
+### A CORS preflight
+
+A request passes with no token as a CORS preflight only when all of these are true:
+
+- The method is `OPTIONS`.
+- The request has an `Origin` header. Some CORS middleware passes an `OPTIONS` request with no
+  `Origin` on to your app.
+- The request has an `Access-Control-Request-Method` header.
+- The request has none of the headers `X-HTTP-Method-Override`, `X-HTTP-Method` and
+  `X-Method-Override`. A framework can route such a request as another method.
+
+Every other `OPTIONS` request needs a token, like any other method. A route that you register with
+no method, such as `/v1/admin`, runs on `OPTIONS` too. The guard checks the token there.
+
+Your CORS middleware answers the preflight. Put it in front of the guard. A preflight that reaches
+your handler has no claims. Register each route with its method, such as `GET /v1/orders/{orderId}`,
+so that a preflight never reaches it. A route registered with no method gets `500` from
+`ScopeGuard` on a preflight, because it has no claims to check.
 
 ## `nethttp.ScopeGuard`
 
@@ -354,7 +404,12 @@ It answers as the Python `McpGuard` does:
 | A `tools/call` whose `params.name` is not a string | `400`, `-32602` |
 | A body over `MaxBodyBytes` | `413`, `-32600` |
 | `GET`, `HEAD` or `DELETE` | Your server. |
-| Any other method | `405`, `Allow: GET, POST, DELETE` |
+| A CORS preflight, as for `TokenGuard` | Your server, with no token check and no claims. Your CORS middleware answers it. |
+| Any other method, `OPTIONS` included | A token first, then `405`, `Allow: GET, POST, DELETE` |
+
+The guard counts a tool call when your server answers with HTTP `2xx`. It does not read the body of
+the answer. A JSON-RPC error, or a result with `isError: true`, inside an HTTP `200` is counted as
+usage too.
 
 The guard reads `jsonrpc`, `method`, `id` and `params`, and `name` in the params of a `tools/call`.
 `encoding/json`, and servers built on it, fill those fields from a member spelled in any case, with
@@ -379,8 +434,10 @@ type ProtectedResourceMetadataOptions struct {
 ```
 
 `resource` is your API's address, exactly as registered: `https`, a lowercase host, no query,
-fragment or final slash. `authorizationServer` is your issuer. Each guard serves the document at
-`metadata.Path()`, such as `/.well-known/oauth-protected-resource/v1`.
+fragment or final slash. `authorizationServer` is your issuer, the same value you give
+`NewTokenVerifier`. It has the same rule: `https`, or plain `http` only for a loopback host.
+`metadata.AuthorizationServer()` gives it back. Each guard serves the document
+at `metadata.Path()`, such as `/.well-known/oauth-protected-resource/v1`.
 
 `metadata.Challenge(code)` gives the `WWW-Authenticate` value, for a refusal you answer yourself:
 `""` for a request with no token, `"invalid_token"` or `"insufficient_scope"`. It panics on a code
@@ -446,11 +503,16 @@ Stops the goroutine, and sends what is in the buffer. It gives up when `ctx` end
 10 seconds when `ctx` has no deadline. What it cannot send in time is lost, with one log line.
 `Record` does nothing after `Close`.
 
+The buffer is in memory only. On a serverless platform, the process can stop when the invocation
+ends. Call `Close` before the invocation ends, or the events in the buffer are lost.
+
 ### What happens to a batch
 
-As in Python. A network error, a `401`, `408`, `409`, `429` or a `5xx` keeps the batch, and it is
-sent again after one interval with the same `Idempotency-Key` and the same body. Any other answer
-drops it, with a log line. When the buffer is full, the oldest event goes.
+A network error, a `401`, `408`, `409`, `429` or a `5xx` keeps the batch, and it is sent again
+after one interval with the same `Idempotency-Key` and the same body. A batch that keelie answers
+with `401` or `409` is sent `keelie.MaxRefusedSends` times in all, 5 times. Then the SDK drops it,
+with `apiable.usage_dropped reason=refused` and the count of its events. Any other answer that is
+not `2xx` drops the batch at once, with a log line. When the buffer is full, the oldest event goes.
 
 ## `NewSDKCredential`
 
@@ -469,6 +531,13 @@ on a `401`. Many requests at once share one mint. It follows no redirect, whatev
 client secret on to the new address. It sends with a copy of your client, and does not change
 yours. A `3xx` is the answer, so the mint fails. This is what the Python quickstart's
 `SdkCredential` class does; in Go it is part of the module.
+
+`KeelieURL` and `TokenURL` must be `https`. Plain `http` is allowed only for `localhost`,
+`127.0.0.1` and `[::1]`, for local development. Any other URL is an error.
+
+The credential and its options never print the client secret or a token. With `%v`, `%+v`, `%#v`
+and every other verb of `fmt`, the options show `ClientSecret:REDACTED`. The credential shows its
+URLs and its client id only.
 
 `KeelieClient` is one method, so a test or a proxy can give its own:
 
@@ -498,14 +567,14 @@ keelie.SetLogger(slog.Default())
 | `apiable.token_rejected` | INFO | A token did not verify. `reason` says why. |
 | `apiable.scope_refused` | INFO | A token did not carry the scope of a route. |
 | `apiable.keys_loaded` | INFO | The SDK fetched the issuer's key set. |
-| `apiable.keys_unavailable` | WARN | The SDK holds no key set and could not fetch one. Every token is refused. |
-| `apiable.keys_not_refreshed` | WARN | A fetch failed. The keys in hand go on verifying. |
+| `apiable.keys_unavailable` | WARN | The SDK holds no key set and could not fetch one. Every token is refused for 5 seconds. |
+| `apiable.keys_not_refreshed` | WARN | A fetch failed, or found no usable key (`error=no_keys`). The keys in hand go on verifying. |
 | `apiable.key_skipped` | WARN | The SDK could not load one key of the set, or it is under 2048 bits. The rest of the set loads. |
 | `apiable.mcp_refused` | INFO | `MCPGuard` refused a request. |
 | `apiable.usage_event_invalid` | WARN | `Record` left out an event that keelie would refuse. |
 | `apiable.usage_sent` | DEBUG | A batch was sent. |
 | `apiable.usage_not_sent` | WARN | A batch failed and waits for a retry. |
-| `apiable.usage_dropped` | WARN | Events were lost: refused by keelie, buffer full, or not sent at shutdown. |
+| `apiable.usage_dropped` | WARN | Events were lost: refused by keelie, refused 5 times with `401` or `409` (`reason=refused`), buffer full, or not sent at shutdown. |
 | `apiable.catalog_fetch_failed` | WARN | The SDK could not fetch the catalog. |
 
 No line holds a token, a secret or a value taken from the request.
@@ -514,7 +583,8 @@ A client you give, an `*http.Client` or a `KeelieClient`, never stops your proce
 or answers with neither a response nor an error, is a failed request: `error=client_panic` or
 `error=no_response` on the line of what failed, such as `apiable.usage_not_sent`. The reporter keeps
 the batch and sends it again, as after a network error. A response body is read up to 1 MiB; a
-longer one is a failed request, `error=too_large`.
+longer one is a failed request, `error=too_large`. An issuer or a `jwks_uri` that is not `https`
+is a failed fetch, `error=issuer_not_https` or `error=jwks_uri_not_https`, with no request sent.
 
 `SDKCredential` mints its token at the token endpoint first. A mint that fails is named on the line
 of what failed: `error="token_status 401"` when the token endpoint answers with a status that is not
@@ -550,7 +620,6 @@ these, with a fake issuer in `go/internal/testkit`.
 | Errors | Raised | Returned. `Challenge()` with a bad code panics. |
 | Path comparison | The ASGI path, exactly | Every form a router could route, without case. The metadata and catalog paths pass with no token only as sent. |
 | A key set with an RSA key under 2048 bits | Loaded | Skipped, with a log line |
-| Callers waiting on a cold key-set fetch that fails | Each tries again in turn | All are refused with that one failure. The next caller tries again. |
 | A caller that stops waiting for the key set | Not possible | `Verify(ctx)` refuses with `keys_unavailable` when `ctx` ends. The fetch goes on. |
 | A time claim (`exp`, `nbf`, `iat`) that is not a JSON number | A string of digits is read as a number; another string in `iat` is `not_yet_valid`; `null` or a list in `iat` or `nbf` raises an error the SDK does not catch | Refused as `malformed` |
 | Amounts | An `int` or a `Decimal` | A decimal string. An exponent is refused. |

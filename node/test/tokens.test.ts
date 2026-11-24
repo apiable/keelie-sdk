@@ -136,6 +136,11 @@ describe("TokenVerifier", () => {
     assert.equal(verifier.status(), "offline");
   });
 
+  it("needs an https issuer, and plain http on a loopback host only", () => {
+    assert.throws(() => new TokenVerifier("http://issuer.example.com/realms/a", RESOURCE, ORG_ID), TypeError);
+    assert.doesNotThrow(() => new TokenVerifier("http://localhost:8080/realms/a", RESOURCE, ORG_ID));
+  });
+
   it("does not start with an org id that is not a UUID", () => {
     assert.throws(() => new TokenVerifier(ISSUER, RESOURCE, "portal-labs"), TypeError);
   });

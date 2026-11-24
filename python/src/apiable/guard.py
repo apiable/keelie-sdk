@@ -46,13 +46,23 @@ class Guard:
     It is ASGI middleware. It wraps :class:`~apiable.MissingTokenChallenge`, so
     one mount line serves the metadata, refuses a request with no token, and
     refuses a token that does not verify. Paths outside ``resource``, a CORS
-    preflight (``OPTIONS``) and every request that is not HTTP pass untouched.
+    preflight and every request that is not HTTP pass untouched. A preflight is
+    an ``OPTIONS`` with ``Origin`` and ``Access-Control-Request-Method``, and no
+    method-override header. Every other ``OPTIONS`` needs a token.
+
+    The guard checks only paths under ``resource``. The app must see the same
+    path as the public ``resource``. A proxy that strips the prefix, such as
+    ``/v1``, leaves every route unguarded.
 
     The verifier's audience must be the ``resource`` of the metadata, or the guard
     does not start. An agent asks keelie for a token with that ``resource`` (RFC
     8707), and keelie writes your org's ``resource`` into ``aud``. A verifier for
     another audience would refuse every such token, or accept a token for another
     server. Set your org's ``resource`` in keelie to the same value.
+
+    The verifier's issuer must be the ``authorization_server`` of the metadata,
+    or the guard does not start. An agent gets its token from the issuer that the
+    metadata names. A verifier for another issuer refuses every such token.
     """
 
     def __init__(
@@ -62,6 +72,11 @@ class Guard:
             raise ValueError(
                 f"the verifier's audience {verifier.audience!r} is not the resource "
                 f"{metadata.resource!r}: give both the same value"
+            )
+        if verifier.issuer != metadata.authorization_server:
+            raise ValueError(
+                f"the verifier's issuer {verifier.issuer!r} is not the authorization server "
+                f"{metadata.authorization_server!r}: give both the same value"
             )
         self._app = app
         self._verifier = verifier

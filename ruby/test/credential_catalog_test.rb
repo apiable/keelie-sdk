@@ -90,6 +90,18 @@ class CredentialTest < Minitest::Test
     assert_equal "the token endpoint answered 401", error.message
     refute_includes keelie.inspect, "s3cret"
   end
+
+  # The secret goes to the token endpoint, and the token to keelie: never over plain http.
+  def test_needs_https_for_the_token_endpoint_and_keelie
+    options = { client_id: "sdk", client_secret: "s3cret", http: Endpoints.new }
+    [{ keelie_url: "http://keelie.example", token_url: TOKEN_URL },
+     { keelie_url: "https://keelie.example", token_url: "http://issuer.example.com/token" },
+     { keelie_url: "https://keelie.example", token_url: "issuer.example.com/token" }].each do |urls|
+      error = assert_raises(ArgumentError, urls.inspect) { Keelie::SdkCredential.new(**urls, **options) }
+      refute_includes error.message, "s3cret"
+    end
+    Keelie::SdkCredential.new(keelie_url: "http://localhost:8000", token_url: "http://127.0.0.1:8080/token", **options)
+  end
 end
 
 class CatalogTest < Minitest::Test
@@ -166,5 +178,17 @@ class CatalogTest < Minitest::Test
     statuses = Array.new(10) { Thread.new { @catalog.answer("/.well-known/ard.json")[0] } }.map(&:value)
     assert_equal [200] * 10, statuses
     assert_equal 1, @fetched
+  end
+
+  def test_gives_the_failure_of_one_fetch_to_every_request_that_waited_on_it
+    [:network, 500].each do |failure|
+      setup
+      @answers << failure
+      statuses = capture_log do
+        Array.new(10) { Thread.new { @catalog.answer("/.well-known/ard.json")[0] } }.map(&:value)
+      end
+      assert_equal [503] * 10, statuses
+      assert_equal 1, @fetched, failure.inspect
+    end
   end
 end

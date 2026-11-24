@@ -261,3 +261,19 @@ func TestNewTokenVerifierRefusesAnOrgIDThatIsNotAUUID(t *testing.T) {
 		t.Fatal("no error")
 	}
 }
+
+func TestNewTokenVerifierRefusesAnIssuerThatIsNotHTTPS(t *testing.T) {
+	for _, bad := range []string{"http://issuer.example.com/realms/portal-labs", "issuer.example.com", ""} {
+		if _, err := NewTokenVerifier(bad, tk.Resource, tk.OrgID, nil); err == nil {
+			t.Errorf("%q was allowed", bad)
+		}
+	}
+	// Plain http on a loopback host is for local development.
+	v, err := NewTokenVerifier("http://localhost:8080/realms/dev", tk.Resource, tk.OrgID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Issuer() != "http://localhost:8080/realms/dev" {
+		t.Fatal(v.Issuer())
+	}
+}

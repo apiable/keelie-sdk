@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import time
 import uuid
@@ -11,7 +12,17 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
-from support import AUDIENCE, ORG_ID, Clock, Issuer, claims, jwk, private_key, signed_token
+from support import (
+    AUDIENCE,
+    ISSUER,
+    ORG_ID,
+    Clock,
+    Issuer,
+    claims,
+    jwk,
+    private_key,
+    signed_token,
+)
 
 from apiable import TokenRejected, TokenVerifier
 from apiable.keys import SigningKeys
@@ -65,15 +76,23 @@ async def test_an_unknown_kid_fetches_once_then_is_refused(
     assert issuer.jwks_fetches == 2
 
 
-async def test_a_cold_cache_refuses_when_the_issuer_is_down_and_retries_next_time(
-    verifier: TokenVerifier, issuer: Issuer, signing_key: RSAPrivateKey
+async def test_a_cold_cache_refuses_when_the_issuer_is_down_and_retries_after_5_seconds(
+    verifier: TokenVerifier, issuer: Issuer, signing_key: RSAPrivateKey, clock: Clock
 ) -> None:
     issuer.down = True
     with pytest.raises(TokenRejected) as rejected:
         await verifier.verify(signed_token(signing_key))
     assert rejected.value.reason == "keys_unavailable"
 
+    # Inside the 5 seconds the failure is remembered: the issuer is not asked.
     issuer.down = False
+    clock.now += 4.9
+    with pytest.raises(TokenRejected) as rejected:
+        await verifier.verify(signed_token(signing_key))
+    assert rejected.value.reason == "keys_unavailable"
+    assert issuer.jwks_fetches == 0
+
+    clock.now += 0.1
     claims = await verifier.verify(signed_token(signing_key))
 
     assert claims.azp == "client-1"
@@ -337,3 +356,155 @@ async def test_a_consumer_id_that_is_no_uuid_is_refused(
         await verifier.verify(signed_token(signing_key, consumer_id=consumer_id))
 
     assert rejected.value.reason == "claims"
+
+
+class _Counting:
+    """An issuer that counts every request, and fails or hangs on each one."""
+
+    def __init__(self, hang: bool) -> None:
+        self.hang = hang
+        self.requests = 0
+
+    async def handler(self, request: httpx.Request) -> httpx.Response:
+        self.requests += 1
+        if self.hang:
+            await asyncio.sleep(60)
+        await asyncio.sleep(0.05)
+        return httpx.Response(503)
+
+
+@pytest.mark.parametrize("hang", [False, True], ids=["failing", "hanging"])
+async def test_concurrent_callers_on_a_cold_cache_share_one_fetch_and_its_failure(
+    signing_key: RSAPrivateKey, clock: Clock, hang: bool
+) -> None:
+    issuer = _Counting(hang)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(issuer.handler))
+    keys = SigningKeys(ISSUER, client=client, clock=clock, fetch_timeout_seconds=0.3)
+    verifier = TokenVerifier(ISSUER, AUDIENCE, ORG_ID, keys=keys)
+    token = signed_token(signing_key)
+
+    async def reason() -> str:
+        with pytest.raises(TokenRejected) as rejected:
+            await verifier.verify(token)
+        return rejected.value.reason
+
+    started = time.monotonic()
+    reasons = await asyncio.gather(*(reason() for _ in range(10)))
+
+    assert reasons == ["keys_unavailable"] * 10
+    assert issuer.requests == 1
+    # All of them finish within about one timeout, not one timeout each.
+    assert time.monotonic() - started < 1.0
+
+
+async def test_an_empty_key_set_does_not_wipe_the_keys_in_hand(
+    verifier: TokenVerifier, issuer: Issuer, signing_key: RSAPrivateKey, clock: Clock
+) -> None:
+    await verifier.verify(signed_token(signing_key))
+    issuer.keys = []
+    clock.now += 60
+    with pytest.raises(TokenRejected):
+        await verifier.verify(signed_token(signing_key, kid="sig-2"))
+    assert issuer.jwks_fetches == 2
+
+    claims = await verifier.verify(signed_token(signing_key))
+
+    assert claims.azp == "client-1"
+    assert verifier.status() == "degraded"
+
+
+async def test_an_empty_key_set_on_a_cold_cache_is_a_failed_fetch(
+    verifier: TokenVerifier, issuer: Issuer, signing_key: RSAPrivateKey
+) -> None:
+    issuer.keys = []
+
+    with pytest.raises(TokenRejected) as rejected:
+        await verifier.verify(signed_token(signing_key))
+
+    assert rejected.value.reason == "keys_unavailable"
+    assert verifier.status() == "offline"
+
+
+@pytest.mark.parametrize(
+    "issuer_url",
+    [
+        "http://issuer.example.test/realms/test",
+        "ftp://issuer.example.test/realms/test",
+        "https:///realms/test",
+        "issuer.example.test",
+        "https://user@issuer.example.test/realms/test",
+        "https://user:pass@issuer.example.test/realms/test",
+    ],
+)
+def test_an_issuer_that_is_not_https_is_refused(issuer_url: str) -> None:
+    with pytest.raises(ValueError, match="issuer must"):
+        TokenVerifier(issuer_url, AUDIENCE, ORG_ID)
+    with pytest.raises(ValueError, match="issuer must"):
+        SigningKeys(issuer_url)
+
+
+@pytest.mark.parametrize(
+    "issuer_url",
+    [
+        "http://localhost:8080/realms/test",
+        "http://127.0.0.1/realms/test",
+        "http://[::1]:8080/realms/test",
+        "http://LOCALHOST:8080/realms/test",
+    ],
+)
+def test_plain_http_is_allowed_on_a_loopback_issuer(issuer_url: str) -> None:
+    assert TokenVerifier(issuer_url, AUDIENCE, ORG_ID).issuer == issuer_url
+
+
+async def test_a_jwks_uri_that_is_not_https_fetches_no_key(
+    signing_key: RSAPrivateKey, clock: Clock
+) -> None:
+    requested: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if request.url.path.endswith("/openid-configuration"):
+            return httpx.Response(
+                200, json={"issuer": ISSUER, "jwks_uri": "http://evil.example/certs"}
+            )
+        return httpx.Response(200, json={"keys": [jwk("sig-1", signing_key)]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    verifier = TokenVerifier(
+        ISSUER, AUDIENCE, ORG_ID, keys=SigningKeys(ISSUER, client=client, clock=clock)
+    )
+
+    with pytest.raises(TokenRejected) as rejected:
+        await verifier.verify(signed_token(signing_key))
+
+    assert rejected.value.reason == "keys_unavailable"
+    assert requested == [f"{ISSUER}/.well-known/openid-configuration"]
+
+
+async def test_a_failed_fetch_whose_only_waiter_was_cancelled_logs_no_lost_exception(
+    signing_key: RSAPrivateKey, clock: Clock, caplog: pytest.LogCaptureFixture
+) -> None:
+    release = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await release.wait()
+        return httpx.Response(503)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    keys = SigningKeys(ISSUER, client=client, clock=clock)
+    verifier = TokenVerifier(ISSUER, AUDIENCE, ORG_ID, keys=keys)
+
+    waiter = asyncio.ensure_future(verifier.verify(signed_token(signing_key)))
+    await asyncio.sleep(0.01)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    release.set()
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+    # asyncio reports a lost exception when the task is collected.
+    del waiter, verifier, keys
+    gc.collect()
+
+    assert "never retrieved" not in caplog.text
+    assert "apiable.keys_unavailable" in caplog.text

@@ -14,8 +14,10 @@ What it checks on a request whose token verified:
 - Every other method passes with no scope check: ``initialize``,
   ``notifications/*``, ``ping``, ``tools/list``, and also ``resources/*`` and
   ``prompts/*``. Apiable sells tools, not resources or prompts.
-- ``GET``, ``HEAD`` and ``DELETE`` pass, and so does a CORS preflight
-  (``OPTIONS``). Every other method gets ``405``, with ``Allow: GET, POST, DELETE``.
+- ``GET``, ``HEAD`` and ``DELETE`` pass. Every other method gets ``405``, with
+  ``Allow: GET, POST, DELETE``. A CORS preflight passes before the token check:
+  an ``OPTIONS`` with ``Origin`` and ``Access-Control-Request-Method``, and no
+  method-override header. Any other ``OPTIONS`` needs a token, and then gets ``405``.
 
 Every refusal is a JSON-RPC error:
 
@@ -32,7 +34,9 @@ Every refusal is a JSON-RPC error:
 
 The usage event is recorded when your server starts a ``2xx`` response, not at
 the end of its body, so a ``text/event-stream`` reply streams through
-unbuffered. The event carries no ``credits``.
+unbuffered. The event carries no ``credits``. The adapter does not read the
+reply. A JSON-RPC error or an ``isError`` result inside an HTTP ``200`` is
+counted as a tool call.
 """
 
 from __future__ import annotations

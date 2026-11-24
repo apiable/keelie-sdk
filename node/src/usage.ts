@@ -29,6 +29,9 @@
  * - A network error, a `401`, `408`, `409`, `429` or a `5xx` keeps the batch.
  *   The reporter sends it again after one interval. It does not read
  *   `Retry-After`.
+ * - A batch that keelie answers with `401` or `409` five times is dropped, with
+ *   a log line. Those answers rarely change, and the batch must not block the
+ *   buffer for good.
  * - Any other answer drops the batch, with a log line. A retry gets the same
  *   answer. `usage-out-of-range` is one of these: the batch would take a counter
  *   or a balance past the largest value keelie keeps.
@@ -37,8 +40,10 @@
  * keelie refuses an event older than the start of the previous month. After an
  * outage that long, a batch that holds such an event is dropped.
  *
- * Nothing is written to disk. {@link UsageReporter.close} sends what is left at
- * shutdown. Events it cannot send in time are lost, with a log line.
+ * Nothing is written to disk, and the timer does not keep the process alive.
+ * {@link UsageReporter.close} sends what is left at shutdown. Events it cannot
+ * send in time are lost, with a log line. On a serverless platform, await
+ * `close()` before the invocation ends, or the events in the buffer are lost.
  */
 
 import { randomUUID } from "node:crypto";
@@ -80,6 +85,11 @@ export const CLOSE_TIMEOUT_SECONDS = 10;
 // A `401` is one: the credential mints a new token for the next try.
 const RETRY_STATUSES: ReadonlySet<number> = new Set([401, 408, 409, 429]);
 
+// Of those, the answers that rarely change. A batch gets one of them this many
+// times at most, then it is dropped.
+const REFUSED_STATUSES: ReadonlySet<number> = new Set([401, 409]);
+export const MAX_REFUSED_SENDS = 5;
+
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/;
 const PROBLEM_CODE = /^[a-z0-9-]{1,64}$/;
@@ -119,7 +129,7 @@ export interface UsageReporterOptions {
 }
 
 type EventBody = Record<string, string>;
-type Batch = { key: string; body: string; count: number };
+type Batch = { key: string; body: string; count: number; refused: number };
 
 /**
  * Collects usage events and sends them to keelie in batches, in the background.
@@ -128,8 +138,8 @@ type Batch = { key: string; body: string; count: number };
  * report usage: use {@link sdkCredential}.
  *
  * Make one reporter for the process. The first `record()` starts its timer.
- * Call {@link close} when the process shuts down. The timer does not keep the
- * process alive.
+ * Call {@link close} when the process shuts down, after the server has finished
+ * its last request. The timer does not keep the process alive.
  */
 export class UsageReporter {
   readonly #keelie: KeelieFetch;
@@ -141,6 +151,12 @@ export class UsageReporter {
   #pending: Batch | null = null;
   #dropped = 0;
   #closed = false;
+  // `close()` has returned. A later `record()` logs its own drop.
+  #shutDown = false;
+  // Events given to `record()` while `close()` runs. Its log line counts them.
+  #late = 0;
+  // `close()` gave up waiting. The flush on its way sends no further batch.
+  #abandoned = false;
   #timer: NodeJS.Timeout | null = null;
   #flushing: Promise<boolean> | null = null;
   // While a batch waits to be sent again, a full buffer does not hurry it.
@@ -174,9 +190,15 @@ export class UsageReporter {
    * as `null` counts as left out, as `None` does in Python: `credits`,
    * `outcomeId` and `consumerId` take no value, and `options` itself takes the
    * defaults. A `unit` or a `quantity` of `null` is refused, as in Python.
+   *
+   * After `close()` has begun, the event is dropped and counted in the
+   * `apiable.usage_dropped ... reason=closed` log line.
    */
   record(clientId: string, capabilityKey: string, options?: RecordOptions | null): void {
-    if (this.#closed) return;
+    if (this.#closed) {
+      this.#dropLate();
+      return;
+    }
     let event: EventBody | null;
     try {
       event = usageEvent(clientId, capabilityKey, options);
@@ -211,6 +233,10 @@ export class UsageReporter {
    *
    * If a batch fails, or `timeoutSeconds` pass, what is not sent is dropped,
    * with one log line. It never rejects.
+   *
+   * A batch still on its way at the timeout is not sent twice. It goes on, and
+   * is logged as `apiable.usage_unconfirmed`, since keelie may still keep it. If
+   * it then fails, it is logged as dropped.
    */
   async close(timeoutSeconds: number = CLOSE_TIMEOUT_SECONDS): Promise<void> {
     if (this.#closed) return;
@@ -218,18 +244,51 @@ export class UsageReporter {
     if (this.#timer !== null) clearTimeout(this.#timer);
     this.#timer = null;
     let timeout: NodeJS.Timeout | undefined;
+    let timedOut = false;
     const expired = new Promise<void>((resolve) => {
-      timeout = setTimeout(resolve, timeoutSeconds * 1000);
+      timeout = setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, timeoutSeconds * 1000);
     });
     try {
       // A flush already on its way finishes first; then one more sends the rest.
+      // Never a second beside the first: it would send the same batch twice.
       if (this.#flushing !== null) await Promise.race([this.#flushing, expired]);
-      await Promise.race([this.#flush().catch(() => false), expired]);
+      if (!timedOut && this.#flushing === null) await Promise.race([this.#startFlush(), expired]);
     } finally {
       clearTimeout(timeout);
     }
-    const lost = this.#events.length + (this.#pending?.count ?? 0);
+    this.#shutDown = true;
+    const flushing = this.#flushing;
+    // The batch on its way is not lost yet. Everything else is.
+    const onItsWay = flushing === null ? 0 : (this.#pending?.count ?? 0);
+    const lost =
+      this.#events.length + (flushing === null ? (this.#pending?.count ?? 0) : 0) + this.#late;
+    this.#late = 0;
+    if (flushing !== null) {
+      this.#abandoned = true;
+      if (onItsWay) log.warn(`apiable.usage_unconfirmed events=${onItsWay} reason=closed`);
+      void flushing.then(() => {
+        if (this.#pending !== null) {
+          log.warn(`apiable.usage_dropped events=${this.#pending.count} reason=closed`);
+        }
+      });
+    }
     if (lost) log.warn(`apiable.usage_dropped events=${lost} reason=closed`);
+  }
+
+  /** An event given to `record()` after `close()` began. It never throws. */
+  #dropLate(): void {
+    if (!this.#shutDown) {
+      this.#late += 1;
+      return;
+    }
+    try {
+      log.warn("apiable.usage_dropped events=1 reason=closed");
+    } catch {
+      // Your logger failed. record() still does not throw.
+    }
   }
 
   #schedule(seconds: number): void {
@@ -246,14 +305,7 @@ export class UsageReporter {
   #tick(): void {
     this.#timer = null;
     if (this.#flushing !== null) return;
-    const flushing = this.#flush().catch((error: unknown) => {
-      // The reporter must outlive any failure.
-      log.warn(`apiable.usage_flush_failed error=${errorName(error)}`);
-      return false;
-    });
-    this.#flushing = flushing;
-    void flushing.then((done) => {
-      this.#flushing = null;
+    void this.#startFlush().then((done) => {
       // keelie or the network failed: wait one interval, whatever fills the
       // buffer, then send the same batch again.
       this.#retrying = !done;
@@ -263,10 +315,28 @@ export class UsageReporter {
     });
   }
 
+  /** Start a flush, the only one on its way. Its promise never rejects. */
+  #startFlush(): Promise<boolean> {
+    const flushing = this.#flush()
+      .catch((error: unknown) => {
+        // The reporter must outlive any failure.
+        log.warn(`apiable.usage_flush_failed error=${errorName(error)}`);
+        return false;
+      })
+      .then((done) => {
+        this.#flushing = null;
+        return done;
+      });
+    this.#flushing = flushing;
+    return flushing;
+  }
+
   /** Send every batch in the buffer. False if a batch must be sent again later. */
   async #flush(): Promise<boolean> {
     try {
       while (this.#pending !== null || this.#events.length > 0) {
+        // close() gave up: it counted what is left as lost, so send no more.
+        if (this.#abandoned) return false;
         if (this.#pending === null) this.#pending = this.#nextBatch();
         if (!(await this.#send(this.#pending))) return false;
         this.#pending = null;
@@ -279,11 +349,12 @@ export class UsageReporter {
 
   #nextBatch(): Batch {
     const events = this.#events.splice(0, this.#batchSize);
-    return { key: randomUUID(), body: JSON.stringify({ events }), count: events.length };
+    return { key: randomUUID(), body: JSON.stringify({ events }), count: events.length, refused: 0 };
   }
 
   /** Send one batch. True when it is done with: kept by keelie, or dropped. */
-  async #send({ key, body, count }: Batch): Promise<boolean> {
+  async #send(batch: Batch): Promise<boolean> {
+    const { key, body, count } = batch;
     let response: Response;
     try {
       response = await this.#keelie(USAGE_PATH, {
@@ -300,6 +371,14 @@ export class UsageReporter {
       await response.body?.cancel();
       log.debug(`apiable.usage_sent events=${count}`);
       return true;
+    }
+    if (REFUSED_STATUSES.has(status)) {
+      batch.refused += 1;
+      if (batch.refused >= MAX_REFUSED_SENDS) {
+        await response.body?.cancel();
+        log.warn(`apiable.usage_dropped events=${count} reason=refused status=${status}`);
+        return true;
+      }
     }
     if (RETRY_STATUSES.has(status) || status >= 500) {
       await response.body?.cancel();

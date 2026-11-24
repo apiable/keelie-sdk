@@ -3,8 +3,10 @@ package keelie
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -273,5 +275,82 @@ func TestAFailedMintIsNamedInTheLog(t *testing.T) {
 			until(t, func() bool { return lines.Has(want) })
 			r.Close(context.Background())
 		})
+	}
+}
+
+func TestNewSDKCredentialRefusesAURLThatIsNotHTTPS(t *testing.T) {
+	for _, c := range []struct{ keelie, token string }{
+		{"http://keelie.example", "https://issuer.example.com/token"},
+		{"https://keelie.example", "http://issuer.example.com/token"},
+		{"keelie.example", "https://issuer.example.com/token"},
+	} {
+		_, err := NewSDKCredential(SDKCredentialOptions{
+			KeelieURL: c.keelie, TokenURL: c.token, ClientID: "sdk", ClientSecret: "s3cret",
+		})
+		if err == nil {
+			t.Errorf("%v was allowed", c)
+		} else if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("the error holds the secret: %v", err)
+		}
+	}
+	if _, err := NewSDKCredential(SDKCredentialOptions{
+		KeelieURL: "http://127.0.0.1:8000", TokenURL: "http://localhost:8080/token", ClientID: "sdk", ClientSecret: "s3cret",
+	}); err != nil {
+		t.Fatalf("a loopback host: %v", err)
+	}
+}
+
+func TestTheSecretAndTheTokenNeverPrint(t *testing.T) {
+	const secret, token = "s3cret-value", "the-access-token"
+	client := &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/token" {
+			return tk.JSON(200, map[string]any{"access_token": token, "expires_in": 300}), nil
+		}
+		return tk.JSON(200, map[string]any{}), nil
+	})}
+	opts := SDKCredentialOptions{
+		KeelieURL: "https://keelie.example", TokenURL: "https://issuer.example.com/token",
+		ClientID: "sdk", ClientSecret: secret, HTTPClient: client,
+	}
+	c, err := NewSDKCredential(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mint a token, so that the credential holds one.
+	resp, err := c.Send(context.Background(), http.MethodGet, "/ai-catalog", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	reporter, err := NewUsageReporter(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := NewProtectedResourceMetadata(tk.Resource, tk.Issuer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type holder struct {
+		Credential *SDKCredential
+		Options    SDKCredentialOptions
+	}
+	for _, value := range []any{opts, &opts, c, holder{c, opts}, reporter, NewAICatalog(c, metadata, nil)} {
+		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
+			out := fmt.Sprintf(verb, value)
+			if strings.Contains(out, secret) || strings.Contains(out, token) ||
+				strings.Contains(out, fmt.Sprintf("%x", secret)) || strings.Contains(out, fmt.Sprintf("%x", token)) {
+				t.Errorf("%s of %T: %s", verb, value, out)
+			}
+		}
+	}
+	if out := fmt.Sprintf("%+v", opts); !strings.Contains(out, "ClientSecret:REDACTED") || !strings.Contains(out, "ClientID:sdk") {
+		t.Errorf("%%+v: %s", out)
+	}
+	if out := fmt.Sprintf("%#v", c); out != `&keelie.SDKCredential{KeelieURL:"https://keelie.example", TokenURL:"https://issuer.example.com/token", ClientID:"sdk"}` {
+		t.Errorf("%%#v: %s", out)
+	}
+	var none *SDKCredential
+	if out := fmt.Sprintf("%v", none); out != "<nil>" {
+		t.Errorf("nil: %s", out)
 	}
 }

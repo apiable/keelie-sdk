@@ -15,14 +15,18 @@ namespace Keelie.AspNetCore;
 /// <para>
 /// It also serves the RFC 9728 metadata at <c>metadata.Path</c>, with no token, and refuses a
 /// request with no token with <c>401</c> and <c>WWW-Authenticate: Bearer resource_metadata="..."</c>,
-/// so an agent can find your issuer. Paths outside <c>resource</c> and a CORS preflight
-/// (<c>OPTIONS</c>) pass untouched.
+/// so an agent can find your issuer. Paths outside <c>resource</c> and a CORS preflight pass
+/// untouched. A CORS preflight is an <c>OPTIONS</c> request with an <c>Origin</c> and an
+/// <c>Access-Control-Request-Method</c> header and no method-override header. Every other
+/// <c>OPTIONS</c> request needs a token, like any other method.
 /// </para>
 /// <para>
 /// The verifier's audience must be the <c>resource</c> of the metadata, or the guard does not
 /// start. An agent asks keelie for a token with that <c>resource</c> (RFC 8707), and keelie writes
 /// your org's <c>resource</c> into <c>aud</c>. A verifier for another audience would refuse every
-/// such token, or accept a token for another server.
+/// such token, or accept a token for another server. In the same way, the verifier's issuer must be
+/// the authorization server of the metadata: agents get their tokens from the issuer the metadata
+/// names.
 /// </para>
 /// </remarks>
 internal sealed class Guard
@@ -34,6 +38,10 @@ internal sealed class Guard
     private readonly byte[] _document;
     private readonly string[] _prefixes;
 
+    // A framework can route a request by one of these instead of by its method, such as
+    // UseHttpMethodOverride. A request that carries one is never taken for a preflight.
+    private static readonly string[] MethodOverrideHeaders = ["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"];
+
     internal Guard(TokenVerifier verifier, ProtectedResourceMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(verifier);
@@ -43,6 +51,13 @@ internal sealed class Guard
             throw new ArgumentException(
                 $"the verifier's audience {JsonSerializer.Serialize(verifier.Audience)} is not the resource "
                 + $"{JsonSerializer.Serialize(metadata.Resource)}: give both the same value",
+                nameof(verifier));
+        }
+        if (verifier.Issuer != metadata.AuthorizationServer)
+        {
+            throw new ArgumentException(
+                $"the verifier's issuer {JsonSerializer.Serialize(verifier.Issuer)} is not the authorization server "
+                + $"{JsonSerializer.Serialize(metadata.AuthorizationServer)}: give both the same value",
                 nameof(verifier));
         }
         _verifier = verifier;
@@ -103,7 +118,7 @@ internal sealed class Guard
     /// True for a request under <c>resource</c> that must carry a token.
     /// </summary>
     /// <remarks>
-    /// A CORS preflight (<c>OPTIONS</c>) and every path outside <c>resource</c> pass. So does a GET
+    /// A CORS preflight (see <see cref="IsPreflight"/>) and every path outside <c>resource</c> pass. So does a GET
     /// or a HEAD of the metadata, and of the AI Catalog at either of its paths when the catalog
     /// serves it. Any other method on those paths needs a token.
     /// <para>
@@ -119,7 +134,7 @@ internal sealed class Guard
     private bool Guarded(HttpContext context, string path)
     {
         var method = context.Request.Method;
-        if (method == "OPTIONS")
+        if (IsPreflight(context.Request))
         {
             return false;
         }
@@ -146,6 +161,31 @@ internal sealed class Guard
             }
         }
         return false;
+    }
+
+    /// <summary>
+    /// True for a CORS preflight: an <c>OPTIONS</c> request with an <c>Origin</c> and an
+    /// <c>Access-Control-Request-Method</c> header, and none of the method-override headers. Your
+    /// CORS middleware answers it. ASP.NET Core's CORS middleware passes on an <c>OPTIONS</c> with no
+    /// <c>Origin</c>, so such a request is not taken for a preflight. Any other <c>OPTIONS</c> request is guarded: an endpoint mapped
+    /// for every method, or an MVC action with only <c>[Route]</c>, would serve it.
+    /// </summary>
+    internal static bool IsPreflight(HttpRequest request)
+    {
+        if (request.Method != HttpMethods.Options
+            || !request.Headers.ContainsKey("Origin")
+            || !request.Headers.ContainsKey("Access-Control-Request-Method"))
+        {
+            return false;
+        }
+        foreach (var name in MethodOverrideHeaders)
+        {
+            if (request.Headers.ContainsKey(name))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /// <summary>

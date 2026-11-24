@@ -15,6 +15,7 @@ public sealed class TokenGuardTests : IAsyncLifetime
     private readonly TestKey _key;
     private readonly ProtectedResourceMetadata _metadata = new(Resource, Values.Issuer);
     private TestApp _app = null!;
+    private int _adminRuns;
 
     public TokenGuardTests() => (_issuer, _key) = StandardIssuer.Make();
 
@@ -38,6 +39,12 @@ public sealed class TokenGuardTests : IAsyncLifetime
             app.MapGroup("/v1").MapGet("/items/{itemId}", () => Results.Ok(new { item = true })).RequireKeelieScope(scopes, _metadata);
             app.MapGet("/v1/no-scope-check", (HttpContext http) => Results.Ok(new { claims = http.GetKeelieClaims() is not null }));
             app.MapMethods("/v1/orders/{orderId}", ["OPTIONS"], () => Results.NoContent());
+            // An endpoint for every method, OPTIONS included.
+            app.Map("/v1/admin", () =>
+            {
+                Interlocked.Increment(ref _adminRuns);
+                return Results.Ok();
+            });
         });
     }
 
@@ -152,14 +159,89 @@ public sealed class TokenGuardTests : IAsyncLifetime
         Assert.Equal("{\"claims\":true}", await allowed.Content.ReadAsStringAsync());
     }
 
+    private async Task<HttpResponseMessage> OptionsAsync(string path, params (string Name, string Value)[] headers)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Options, path);
+        foreach (var (name, value) in headers)
+        {
+            request.Headers.TryAddWithoutValidation(name, value);
+        }
+        return await _app.Http.SendAsync(request);
+    }
+
     [Fact]
     public async Task Paths_outside_the_resource_and_a_preflight_pass_untouched()
     {
         using var health = await _app.SendAsync(HttpMethod.Get, "/health");
-        using var preflight = await _app.SendAsync(HttpMethod.Options, "/v1/orders/42");
+        using var preflight = await OptionsAsync("/v1/orders/42", ("Origin", "https://app.example.test"), ("Access-Control-Request-Method", "GET"));
 
         Assert.Equal(HttpStatusCode.OK, health.StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, preflight.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_options_request_that_is_no_preflight_needs_a_token()
+    {
+        using var admin = await OptionsAsync("/v1/admin");
+        using var orders = await OptionsAsync("/v1/orders/42", ("Origin", "https://app.example.test"));
+        using var withToken = await OptionsAsync("/v1/admin", ("Authorization", Token()));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, admin.StatusCode);
+        Assert.Equal($"Bearer resource_metadata=\"{MetadataUrl}\"", admin.Headers.WwwAuthenticate.ToString());
+        Assert.Equal(HttpStatusCode.Unauthorized, orders.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, withToken.StatusCode);
+        Assert.Equal(1, _adminRuns);
+    }
+
+    [Fact]
+    public async Task A_preflight_with_no_origin_needs_a_token()
+    {
+        // ASP.NET Core's CORS middleware passes an OPTIONS with no Origin on to the endpoint.
+        using var response = await OptionsAsync("/v1/admin", ("Access-Control-Request-Method", "GET"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(0, _adminRuns);
+    }
+
+    [Theory]
+    [InlineData("X-HTTP-Method-Override")]
+    [InlineData("X-HTTP-Method")]
+    [InlineData("X-Method-Override")]
+    [InlineData("x-http-method-override")]
+    public async Task A_preflight_with_a_method_override_header_needs_a_token(string header)
+    {
+        using var response = await OptionsAsync("/v1/admin", ("Origin", "https://app.example.test"), ("Access-Control-Request-Method", "GET"), (header, "GET"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(0, _adminRuns);
+    }
+
+    [Fact]
+    public async Task A_post_that_use_http_method_override_turns_into_options_needs_a_token()
+    {
+        // UseHttpMethodOverride reads X-HTTP-Method-Override on a POST. The header stays on the
+        // request, so the guard does not take it for a preflight.
+        var runs = 0;
+        var verifier = _issuer.Verifier(audience: Resource);
+        await using var app = await TestApp.StartAsync(web =>
+        {
+            web.UseHttpMethodOverride();
+            web.UseKeelieTokenGuard(verifier, _metadata);
+            web.Map("/v1/admin", (HttpContext http) =>
+            {
+                Interlocked.Increment(ref runs);
+                return Results.Ok(new { method = http.Request.Method });
+            });
+        });
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/admin");
+        request.Headers.TryAddWithoutValidation("X-HTTP-Method-Override", "OPTIONS");
+        request.Headers.TryAddWithoutValidation("Origin", "https://app.example.test");
+        request.Headers.TryAddWithoutValidation("Access-Control-Request-Method", "GET");
+
+        using var response = await app.Http.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(0, runs);
     }
 
     [Theory]
@@ -319,6 +401,71 @@ public sealed class GuardTests
         var error = await Assert.ThrowsAsync<ArgumentException>(() => TestApp.StartAsync(app => Adapter(app, adapter, elsewhere, metadata)));
 
         Assert.Contains("is not the resource", error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("rest")]
+    [InlineData("mcp")]
+    public async Task Neither_adapter_starts_for_an_issuer_that_is_not_the_authorization_server(string adapter)
+    {
+        // Agents get their tokens from the issuer the metadata names. A verifier for another issuer
+        // would refuse every one of them.
+        var metadata = new ProtectedResourceMetadata(Values.Audience, Values.Issuer);
+        var elsewhere = new TokenVerifier("https://issuer.example.test/realms/other", Values.Audience, Values.OrgId);
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => TestApp.StartAsync(app => Adapter(app, adapter, elsewhere, metadata)));
+
+        Assert.Contains("is not the authorization server", error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("rest", "http://localhost:8080/realms/test")]
+    [InlineData("mcp", "http://127.0.0.1:8080/realms/test")]
+    [InlineData("rest", "http://[::1]:8080/realms/test")]
+    public async Task Both_adapters_start_with_a_loopback_http_issuer(string adapter, string issuer)
+    {
+        var metadata = new ProtectedResourceMetadata(Values.Audience, issuer);
+        await using var app = await TestApp.StartAsync(web =>
+        {
+            Adapter(web, adapter, new TokenVerifier(issuer, Values.Audience, Values.OrgId), metadata);
+            web.Run(context => context.Response.WriteAsync("{}"));
+        });
+
+        using var response = await app.SendAsync(HttpMethod.Get, "/api");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(issuer, JsonDocument.Parse(metadata.Document).RootElement.GetProperty("authorization_servers")[0].GetString());
+    }
+
+    [Theory]
+    [InlineData("rest", false, 401)]
+    [InlineData("rest", true, 200)]
+    [InlineData("mcp", false, 401)]
+    [InlineData("mcp", true, 200)]
+    public async Task Both_adapters_pass_only_a_real_preflight_with_no_token(string adapter, bool preflight, int status)
+    {
+        var runs = 0;
+        var metadata = new ProtectedResourceMetadata(Values.Audience, Values.Issuer);
+        await using var app = await TestApp.StartAsync(web =>
+        {
+            Adapter(web, adapter, new TokenVerifier(Values.Issuer, Values.Audience, Values.OrgId), metadata);
+            web.Run(context =>
+            {
+                Interlocked.Increment(ref runs);
+                return context.Response.WriteAsync("{}");
+            });
+        });
+        using var request = new HttpRequestMessage(HttpMethod.Options, "/api");
+        if (preflight)
+        {
+            request.Headers.TryAddWithoutValidation("Origin", "https://app.example.test");
+            request.Headers.TryAddWithoutValidation("Access-Control-Request-Method", "POST");
+        }
+
+        using var response = await app.Http.SendAsync(request);
+
+        Assert.Equal(status, (int)response.StatusCode);
+        Assert.Equal(preflight ? 1 : 0, runs);
     }
 
     [Theory]

@@ -68,21 +68,27 @@ app.get("/v1/orders/:orderId", scopeGuard(scopes, metadata), (req, res) => {
 });
 
 const server = app.listen(3000);
-process.on("SIGTERM", async () => {
-  server.close();
-  await reporter.close();
+process.on("SIGTERM", () => {
+  // The callback runs when every request has finished. Then send the usage that is left.
+  server.close(() => {
+    void reporter.close();
+  });
 });
 ```
 
 What each line does:
 
-- `tokenGuard` checks the token of every request under your address. It refuses a missing or bad
-  token with `401`, before your route runs, and puts the claims on `req.keelieClaims`.
+- `tokenGuard` checks the token of every request under your address, except a CORS preflight. It
+  refuses a missing or bad token with `401`, before your route runs. It puts the claims on
+  `req.keelieClaims`.
 - `scopeGuard` refuses a token that does not carry the scope of the route, with `403`.
 - `reporter.record` puts one usage event in memory and returns at once. A timer sends the events to
   keelie every 5 seconds. `credits` is what the call costs the Consumer. `consumerId` names the
   Consumer on a token for a person, whose `azp` is an agent's client. On a credential's token it is
   `null`.
+- On `SIGTERM`, `server.close()` stops new connections. Its callback runs when every request has
+  finished. Only then does `reporter.close()` send the events that are left. An event recorded
+  after `reporter.close()` began is dropped, with a log line.
 
 Then check it as in steps 6 and 7 of the quickstart.
 
@@ -116,7 +122,7 @@ new TokenVerifier(issuer: string, audience: string, orgId: string, options?: {
 
 | Argument | Value |
 |---|---|
-| `issuer` | `issuer` from the signup answer: your own realm. |
+| `issuer` | `issuer` from the signup answer: your own realm. It must be `https`. Plain `http` is taken only for a loopback host (`localhost`, `127.0.0.1` or `[::1]`). Another value throws `TypeError`. |
 | `audience` | Your API's address, the `resource` you registered. Every token carries it in `aud`. |
 | `orgId` | `id` from the signup answer. A value that is not a UUID throws `TypeError`. |
 
@@ -148,7 +154,20 @@ network call.
 | `offline` | No key in hand. Every token is refused. A new process is `offline` until the first token fetches the key set. |
 
 The discovery document is fetched from the issuer's address, and the key set from the `jwks_uri` it
-names, as in Python. A redirect is not followed: the fetch fails, as a network error does.
+names, as in Python. A redirect is not followed: the fetch fails, as a network error does. The
+`jwks_uri` must be `https`, or `http` on a loopback host. Another `jwks_uri` fails the fetch.
+
+Each fetch has a total deadline of 5 seconds, the body included. A cold start fetches two
+documents, so it takes 10 seconds at most.
+
+On a cold start, with no key in hand, every request waits on one fetch. Each gets the outcome of
+that fetch, a failure too. The SDK keeps a failed cold fetch for 5 seconds. In that window a token
+is refused at once with `keys_unavailable`, and the issuer is not asked. The first token after the
+window fetches again.
+
+A key set with no usable signing key counts as a failed fetch. The keys in hand stay, and go on
+verifying, and the status is `degraded`. A key set with a usable key replaces the old set. So a
+rotation still retires the old key.
 
 ### `Claims`
 
@@ -198,15 +217,30 @@ app.use(tokenGuard({ verifier, metadata }));
 | No Bearer token | `401`, `WWW-Authenticate: Bearer resource_metadata="..."` |
 | A token that does not verify | `401`, `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="..."`, an empty body. The same answer for every reason. |
 | A token that verifies | Your route runs, with the claims on `req.keelieClaims`. |
-| A path outside your address, or a CORS preflight (`OPTIONS`) | Your app, untouched. |
+| A path outside your address, or a CORS preflight | Your app, untouched. |
+| An `OPTIONS` that is not a CORS preflight | The same as any other method: a token is needed. |
+
+A CORS preflight is an `OPTIONS` request with three things. It has an `Origin` header. It has an
+`Access-Control-Request-Method` header. It has none of the headers `X-HTTP-Method-Override`,
+`X-HTTP-Method` and `X-Method-Override`. A framework can route a request with one of these
+headers as another method. The guard passes a preflight with no token. Your CORS middleware
+answers it. Put that middleware before the guard, or on the route.
 
 It compares the path in every form Express could route it by: as sent, with dot segments resolved,
 with escapes read, with doubled slashes folded, and without case. Express routes without case
 unless you set `case sensitive routing`, so `/V1/orders` reaches your `/v1/orders` route, and the
 guard checks its token. It can only guard more than your router serves, never less.
 
+It reads two paths: the path the client sent (`req.originalUrl`), and the path Express routes by
+(`req.baseUrl` and `req.url`). A middleware before the guard can rewrite `req.url`. The guard checks
+the token when either path is under your address.
+
+**The guard checks only paths under your address.** Your app must see the same path as the public
+`resource`. A proxy or a gateway that strips the prefix, such as `/v1`, leaves every route
+unguarded. Set the proxy to keep the prefix.
+
 The verifier's `audience` must be the `resource` of the metadata, or `tokenGuard` throws when you
-make it.
+make it. In the same way, the verifier's issuer must be the `authorizationServer` of the metadata.
 
 ## `scopeGuard` (Express)
 
@@ -269,10 +303,18 @@ It answers as the Python `McpGuard` does:
 | A `tools/call` whose `params.name` is not a string | `400`, `-32602` |
 | A body over `maxBodyBytes` | `413`, `-32600` |
 | `GET`, `HEAD` or `DELETE` | Your server. |
-| Any other method | `405`, `Allow: GET, POST, DELETE` |
+| A CORS preflight, as for `tokenGuard` | Your server, with no token. Your CORS middleware answers it. |
+| Any other method, also an `OPTIONS` that is not a preflight | `405`, `Allow: GET, POST, DELETE` |
 
 If a body parser has already read the body, the guard reads `req.body` as it found it, and can no
 longer tell a key given twice.
+
+**A `2xx` counts as a tool call.** The guard records the event when your server starts a `2xx`
+response. It does not read the reply. A JSON-RPC error, or a result with `isError: true`, inside an
+HTTP `200` is counted as usage too.
+
+As for `tokenGuard`, the app must see the same path as the public `resource`. A proxy that strips
+the prefix leaves the endpoint unguarded.
 
 ---
 
@@ -285,8 +327,10 @@ new ProtectedResourceMetadata(resource: string, authorizationServer: string, opt
 ```
 
 `resource` is your API's address, exactly as registered: `https`, a lowercase host, no query,
-fragment or final slash. `authorizationServer` is your issuer. Each guard serves the document at
-`metadata.path`, such as `/.well-known/oauth-protected-resource/v1`.
+fragment or final slash. `authorizationServer` is your issuer, the same value you give
+`TokenVerifier`. It must be `https`, or `http` on a loopback host only. A guard throws when you
+make it with a verifier of another issuer. Each guard serves the document at `metadata.path`, such
+as `/.well-known/oauth-protected-resource/v1`.
 
 `metadata.challenge(error?)` gives the `WWW-Authenticate` value, for a refusal you answer yourself.
 
@@ -314,7 +358,11 @@ new UsageReporter(keelie: KeelieFetch, options?: {
 })
 ```
 
-Make one reporter for the process. Its timer does not keep the process alive.
+Make one reporter for the process. Its timer does not keep the process alive. Nothing is written
+to disk.
+
+**On a serverless platform, await `reporter.close()` before the invocation ends.** The platform can
+freeze or stop the process after the response. The events in the buffer are then lost.
 
 ### `reporter.record(clientId, capabilityKey, options?): void`
 
@@ -340,14 +388,24 @@ Python SDK makes, so one outcome reported from both is still charged once.
 
 ### `await reporter.close(timeoutSeconds = 10): Promise<void>`
 
-Stops the timer, and sends what is in the buffer. What it cannot send in time is lost, with one log
-line. It never rejects.
+Stops the timer, and sends what is in the buffer. What it cannot send in time is lost, with the log
+line `apiable.usage_dropped events=... reason=closed`. It never rejects.
+
+A batch that is on its way when `close()` begins is not sent a second time. If that batch is still
+on its way at the timeout, the log line is `apiable.usage_unconfirmed events=... reason=closed`:
+keelie can still keep it. If it fails after that, it is logged as dropped.
+
+`record()` after `close()` began drops the event. The `reason=closed` log line counts it.
 
 ### What happens to a batch
 
 As in Python. A network error, a `401`, `408`, `409`, `429` or a `5xx` keeps the batch, and it is
 sent again after one interval with the same `Idempotency-Key` and the same body. Any other answer
 drops it, with a log line. When the buffer is full, the oldest event goes.
+
+A batch that keelie answers with `401` or `409` is sent 5 times at most. Then it is dropped, with
+`apiable.usage_dropped events=... reason=refused status=...`. A network error or a `5xx` has no
+such limit.
 
 ## `sdkCredential`
 
@@ -359,6 +417,8 @@ Sends each request to keelie with a token of your SDK credential. It mints the t
 client credentials grant, keeps it until shortly before it expires, and mints again on a `401`.
 It follows no redirect, from the token endpoint or from keelie: a `307` or `308` would send the
 secret or the token on to another address. A redirect fails the request.
+`keelieUrl` and `tokenUrl` must be `https`, because the secret and the token go there. Plain `http`
+is taken only for a loopback host. Another value throws `TypeError`.
 This is what the Python quickstart's `SdkCredential` class does; in Node it is part of the package.
 
 ---
@@ -399,4 +459,3 @@ const verifier = new TokenVerifier(issuer, resource, orgId, { keys });
 | Talking to keelie | An `httpx.AsyncClient` with the quickstart's `SdkCredential` | `sdkCredential()`, in the package |
 | Path comparison | As the ASGI server gives it | Every form Express could route, without case |
 | A key set with an RSA key under 2048 bits | Loaded | Skipped, with a log line. jose verifies nothing with it. |
-| Callers waiting on a cold key-set fetch that fails | Each tries again in turn | All are refused with that one failure. The next caller tries again. |

@@ -67,15 +67,129 @@ public sealed class TokenTests
     }
 
     [Fact]
-    public async Task A_cold_cache_refuses_when_the_issuer_is_down_and_retries_next_time()
+    public async Task A_cold_cache_refuses_when_the_issuer_is_down_and_retries_after_5_seconds()
     {
         _issuer.Down = true;
         Assert.Equal(RejectionReason.KeysUnavailable, await RejectedAsync(Tokens.Sign(_key)));
+        Assert.Single(_issuer.Requests);
 
+        // Inside the 5 seconds, a token is refused at once, and the issuer is not asked.
         _issuer.Down = false;
+        _clock.Advance(4.9);
+        Assert.Equal(RejectionReason.KeysUnavailable, await RejectedAsync(Tokens.Sign(_key)));
+        Assert.Single(_issuer.Requests);
+
+        // After them, the next token fetches again.
+        _clock.Advance(0.1);
         var claims = await _verifier.VerifyAsync(Tokens.Sign(_key));
 
         Assert.Equal("client-1", claims.Azp);
+        Assert.Equal(1, _issuer.JwksFetches);
+    }
+
+    [Fact]
+    public async Task Concurrent_callers_on_a_cold_cache_share_one_failed_fetch()
+    {
+        _issuer.Down = true;
+
+        var reasons = await Task.WhenAll(Enumerable.Range(0, 8).Select(async _ =>
+            (await Assert.ThrowsAsync<TokenRejected>(() => _verifier.VerifyAsync(Tokens.Sign(_key)))).Reason));
+
+        Assert.All(reasons, reason => Assert.Equal(RejectionReason.KeysUnavailable, reason));
+        Assert.Single(_issuer.Requests);
+    }
+
+    [Fact]
+    public async Task Concurrent_callers_on_a_hanging_issuer_all_finish_within_one_timeout()
+    {
+        // The issuer never answers, and its handler does not watch the token.
+        var hanging = new HangingIssuer();
+        var verifier = new TokenVerifier(Values.Issuer, Values.Audience, Values.OrgId, new TokenVerifierOptions
+        {
+            Keys = new SigningKeys(Values.Issuer, new SigningKeysOptions { HttpClient = new HttpClient(hanging) }),
+        });
+        var started = System.Diagnostics.Stopwatch.StartNew();
+
+        var reasons = await Task.WhenAll(Enumerable.Range(0, 4).Select(async _ =>
+            (await Assert.ThrowsAsync<TokenRejected>(() => verifier.VerifyAsync(Tokens.Sign(_key)))).Reason));
+
+        Assert.All(reasons, reason => Assert.Equal(RejectionReason.KeysUnavailable, reason));
+        Assert.Equal(1, hanging.Requests);
+        Assert.InRange(started.Elapsed, SigningKeys.FetchTimeout - TimeSpan.FromSeconds(0.5), SigningKeys.FetchTimeout + TimeSpan.FromSeconds(2.5));
+    }
+
+    private sealed class HangingIssuer : HttpMessageHandler
+    {
+        public int Requests;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref Requests);
+            return new TaskCompletionSource<HttpResponseMessage>().Task;
+        }
+    }
+
+    [Fact]
+    public async Task An_empty_key_set_does_not_replace_the_keys_in_hand()
+    {
+        await _verifier.VerifyAsync(Tokens.Sign(_key));
+        _issuer.Keys = [];
+        _clock.Advance(60);
+
+        // The unknown kid fetches, and the set that comes back has no key.
+        Assert.Equal(RejectionReason.Kid, await RejectedAsync(Tokens.Sign(_key, kid: "sig-2")));
+        Assert.Equal(2, _issuer.JwksFetches);
+
+        Assert.Equal("client-1", (await _verifier.VerifyAsync(Tokens.Sign(_key))).Azp);
+        Assert.Equal(IssuerStatus.Degraded, _verifier.Status);
+    }
+
+    [Fact]
+    public async Task A_key_set_with_no_usable_key_on_a_cold_cache_is_a_failed_fetch()
+    {
+        _issuer.Keys = [new TestKey("enc-1").Jwk(new() { ["use"] = "enc" })];
+
+        Assert.Equal(RejectionReason.KeysUnavailable, await RejectedAsync(Tokens.Sign(_key)));
+        Assert.Equal(IssuerStatus.Offline, _verifier.Status);
+    }
+
+    [Theory]
+    [InlineData("http://issuer.example.test/realms/test")]
+    [InlineData("http://10.0.0.1/realms/test")]
+    [InlineData("ftp://issuer.example.test/realms/test")]
+    [InlineData("issuer.example.test/realms/test")]
+    [InlineData("")]
+    [InlineData("https://user@issuer.example.test/realms/test")]
+    [InlineData("https://user:secret@issuer.example.test/realms/test")]
+    [InlineData("http://user@localhost:8080/realms/test")]
+    public void An_issuer_that_is_not_https_is_refused(string issuer)
+    {
+        Assert.Throws<ArgumentException>(() => new TokenVerifier(issuer, Values.Audience, Values.OrgId));
+        Assert.Throws<ArgumentException>(() => new SigningKeys(issuer));
+    }
+
+    [Theory]
+    [InlineData("http://localhost:8080/realms/test")]
+    [InlineData("http://127.0.0.1:8080/realms/test")]
+    [InlineData("http://[::1]:8080/realms/test")]
+    [InlineData("http://LOCALHOST:8080/realms/test")]
+    [InlineData("https://issuer.example.test/realms/test")]
+    public void An_https_or_loopback_issuer_is_taken(string issuer)
+    {
+        Assert.Equal(issuer, new TokenVerifier(issuer, Values.Audience, Values.OrgId).Issuer);
+        _ = new SigningKeys(issuer);
+    }
+
+    [Theory]
+    [InlineData("http://issuer.example.test/realms/test/protocol/openid-connect/certs")]
+    [InlineData("/realms/test/protocol/openid-connect/certs")]
+    public async Task A_jwks_uri_that_is_not_https_fetches_no_key(string jwksUri)
+    {
+        _issuer.JwksUri = jwksUri;
+
+        Assert.Equal(RejectionReason.KeysUnavailable, await RejectedAsync(Tokens.Sign(_key)));
+        Assert.Equal(0, _issuer.JwksFetches);
+        Assert.DoesNotContain(_issuer.Requests, url => url.Contains("certs", StringComparison.Ordinal));
     }
 
     [Fact]

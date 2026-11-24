@@ -39,6 +39,8 @@ module Keelie
 
     # The URL an agent types for your API, exactly, path included.
     attr_reader :resource
+    # The issuer an agent gets its token from, exactly as given.
+    attr_reader :authorization_server
     # Where the metadata is served on your host, such as
     # +/.well-known/oauth-protected-resource/v1+.
     attr_reader :path
@@ -54,13 +56,18 @@ module Keelie
 
     # +resource+ is your API's address, exactly as registered: https, a lowercase host,
     # no user, query, fragment or final slash. +authorization_server+ is the issuer,
-    # the same value you give {TokenVerifier}. It is one issuer: an agent uses the
+    # the same value you give {TokenVerifier}: https, or plain http on a loopback host. It is one issuer: an agent uses the
     # first and does not try a second. +scopes_supported+ is published only if you
     # give it. Raises ArgumentError for a value that breaks these rules.
     def initialize(resource, authorization_server, scopes_supported: nil)
       netloc, resource_path = https_url("resource", resource)
-      issuer = https_url("authorization_server", authorization_server) && authorization_server
+      issuer = authorization_server
+      # The issuer follows the rule of the SDK's other URLs: plain http on a loopback host
+      # is for local development. Every other rule of +https_url+ still holds.
+      local = issuer.is_a?(String) && issuer.start_with?("http://") && HTTP.secure_url?(issuer)
+      https_url("authorization_server", local ? "https://#{issuer.delete_prefix("http://")}" : issuer)
       @resource = resource.dup.freeze
+      @authorization_server = issuer.dup.freeze
       # The well-known name goes between the host and the path (RFC 9728 section 3.1).
       @prefix = ["", "/"].include?(resource_path) ? "" : resource_path.sub(%r{/+\z}, "")
       @path = "#{WELL_KNOWN}#{@prefix}".freeze

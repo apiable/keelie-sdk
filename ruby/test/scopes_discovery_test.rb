@@ -91,7 +91,13 @@ class ScopesDiscoveryTest < Minitest::Test
      "https://api.example.com/#"].each do |bad|
       assert_raises(ArgumentError, bad) { Keelie::ProtectedResourceMetadata.new(bad, ISSUER) }
     end
-    assert_raises(ArgumentError) { Keelie::ProtectedResourceMetadata.new("https://api.example.com", "http://issuer") }
+    ["http://issuer", "http://issuer.example.com", "https://user@issuer.example.com", "http://localhost/a/",
+     "http://localhost/a?x"].each do |bad|
+      assert_raises(ArgumentError, bad) { Keelie::ProtectedResourceMetadata.new("https://api.example.com", bad) }
+    end
+    %w[http://localhost:8080/realms/a http://127.0.0.1/realms/a http://[::1]:8080/realms/a].each do |local|
+      Keelie::ProtectedResourceMetadata.new("https://api.example.com", local)
+    end
     assert_raises(ArgumentError) do
       Keelie::ProtectedResourceMetadata.new("https://api.example.com", ISSUER, scopes_supported: "a b")
     end

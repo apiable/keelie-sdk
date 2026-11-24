@@ -193,6 +193,46 @@ async def test_a_failed_batch_is_sent_again_unchanged(
     assert len(keelie.requests) == 2
 
 
+@pytest.mark.parametrize("status", [401, 409])
+async def test_a_batch_refused_5_times_with_401_or_409_is_dropped(
+    keelie: Keelie,
+    reporter_for: Callable[..., UsageReporter],
+    caplog: pytest.LogCaptureFixture,
+    status: int,
+) -> None:
+    keelie.answers = [status] * 5
+    reporter = reporter_for(batch_size=2, flush_interval_seconds=0.02)
+
+    reporter.record(CLIENT_ID, "GET /orders")
+    reporter.record(CLIENT_ID, "GET /orders")
+    reporter.record(CLIENT_ID, "GET /next")
+    await _until(lambda: len(keelie.requests) == 6)
+    await asyncio.sleep(0.1)
+
+    # The same batch five times, then the next batch, which keelie keeps.
+    keys = [request.headers["Idempotency-Key"] for request in keelie.requests]
+    assert len(set(keys[:5])) == 1
+    assert keys[5] != keys[0]
+    assert [e["capability_key"] for e in keelie.batches()[5]] == ["GET /next"]
+    assert len(keelie.requests) == 6
+    assert f"apiable.usage_dropped events=2 reason=refused status={status}" in caplog.text
+    await reporter.aclose()
+
+
+@pytest.mark.parametrize("status", [500, 503])
+async def test_a_5xx_batch_is_never_dropped_for_its_count_of_tries(
+    keelie: Keelie, reporter_for: Callable[..., UsageReporter], status: int
+) -> None:
+    keelie.answers = [status] * 7
+    reporter = reporter_for(batch_size=1, flush_interval_seconds=0.01)
+
+    reporter.record(CLIENT_ID, "GET /orders")
+    await _until(lambda: len(keelie.requests) == 8)
+
+    assert len({request.headers["Idempotency-Key"] for request in keelie.requests}) == 1
+    await reporter.aclose()
+
+
 @pytest.mark.parametrize(
     ("status", "problem_type", "logged"),
     [

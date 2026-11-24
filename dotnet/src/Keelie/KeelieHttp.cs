@@ -23,4 +23,29 @@ internal static class KeelieHttp
             throw new ArgumentException("the keelie client needs an absolute BaseAddress: set it to KEELIE_URL", parameter);
         }
     }
+
+    /// <summary>
+    /// True for an https URL with a host, and for a plain http URL to a loopback host, for local
+    /// development: <c>localhost</c>, <c>127.0.0.1</c> or <c>[::1]</c>, in any case. A URL with a
+    /// user is refused. A secret, a token or a key set goes to no other address.
+    /// </summary>
+    internal static bool IsSecure(Uri? uri) =>
+        uri is { IsAbsoluteUri: true, Host.Length: > 0, UserInfo.Length: 0 }
+        && (uri.Scheme == Uri.UriSchemeHttps
+            || (uri.Scheme == Uri.UriSchemeHttp && uri.Host is "localhost" or "127.0.0.1" or "[::1]"));
+
+    /// <summary>The value as a URI, if <see cref="IsSecure"/> holds for it.</summary>
+    /// <exception cref="ArgumentException">It is not an absolute URL, or not https off a loopback host.</exception>
+    internal static Uri RequireSecure(string? value, string parameter)
+    {
+        if (value is null || !Uri.TryCreate(value, UriKind.Absolute, out var uri) || !IsSecure(uri))
+        {
+            // A URL with a user can hold a password: it stays out of the message.
+            var shown = value is null || value.Contains('@', StringComparison.Ordinal) ? "(not shown)" : System.Text.Json.JsonSerializer.Serialize(value);
+            throw new ArgumentException(
+                $"{parameter} must be an https URL with no user, or http to localhost, 127.0.0.1 or [::1]: {shown}",
+                parameter);
+        }
+        return uri;
+    }
 }

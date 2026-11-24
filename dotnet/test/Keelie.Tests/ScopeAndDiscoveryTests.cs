@@ -167,6 +167,27 @@ public sealed class DiscoveryTests
         Assert.Equal(resource, new ProtectedResourceMetadata(resource, Values.Issuer).Resource);
     }
 
+    [Theory]
+    [InlineData("http://issuer.example.test/realms/test")]
+    [InlineData("http://10.0.0.1/realms/test")]
+    [InlineData("http://user@localhost/realms/test")]
+    [InlineData("http://localhost/realms/test?x=1")]
+    [InlineData("http://localhost/realms/test/")]
+    [InlineData("https://user@issuer.example.test/realms/test")]
+    public void An_authorization_server_that_is_not_https_or_loopback_http_is_refused(string issuer)
+    {
+        Assert.Throws<ArgumentException>(() => new ProtectedResourceMetadata(Resource, issuer));
+    }
+
+    [Theory]
+    [InlineData("http://localhost:8080/realms/test")]
+    [InlineData("http://127.0.0.1/realms/test")]
+    [InlineData("http://[::1]:8080/realms/test")]
+    public void A_loopback_http_authorization_server_is_taken(string issuer)
+    {
+        Assert.Equal(issuer, new ProtectedResourceMetadata(Resource, issuer).AuthorizationServer);
+    }
+
     [Fact]
     public void Scopes_are_published_only_when_given_and_one_scope_each()
     {

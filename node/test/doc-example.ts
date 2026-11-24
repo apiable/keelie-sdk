@@ -41,7 +41,9 @@ app.get("/v1/orders/:orderId", scopeGuard(scopes, metadata), (req, res) => {
 });
 
 const server = app.listen(3000);
-process.on("SIGTERM", async () => {
-  server.close();
-  await reporter.close();
+process.on("SIGTERM", () => {
+  // The callback runs when every request has finished. Then send the usage that is left.
+  server.close(() => {
+    void reporter.close();
+  });
 });

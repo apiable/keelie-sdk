@@ -20,7 +20,12 @@ module Keelie
   # Each guard also serves the RFC 9728 metadata at +metadata.path+, with no token,
   # and refuses a request with no token with 401 and
   # +WWW-Authenticate: Bearer resource_metadata="..."+, so an agent can find your
-  # issuer. Paths outside +resource+ and a CORS preflight (+OPTIONS+) pass untouched.
+  # issuer. Paths outside +resource+ and a CORS preflight pass untouched: see
+  # {Rack.preflight?}. Your own CORS middleware answers the preflight.
+  #
+  # The guard checks only the paths under +resource+. Your app must see the same path
+  # as the public +resource+. A proxy or a gateway that strips the prefix, such as
+  # +/v1+, leaves every route unguarded.
   #
   # Rack has no routes, so the scope of a REST route is checked in the route: see
   # {Keelie::Rails::ScopeCheck}, or call {ScopeMap#check} yourself.
@@ -36,6 +41,10 @@ module Keelie
     # would refuse every such token, or accept a token for another server. Set your
     # org's +resource+ in keelie to the same value.
     #
+    # In the same way, the verifier's issuer must be the +authorization_server+ of the
+    # metadata. The metadata sends agents to that issuer for a token, and the verifier
+    # accepts only the tokens of its own issuer.
+    #
     # The path compared is the path the client sent, as Rack gives it: +SCRIPT_NAME+
     # then +PATH_INFO+. It is compared in every form a Rack router could route it by:
     # as sent, with its escapes read, its dot segments resolved and its doubled slashes
@@ -48,6 +57,10 @@ module Keelie
         if verifier.audience != metadata.resource
           raise ArgumentError, "the verifier's audience #{verifier.audience.inspect} is not the resource " \
                                "#{metadata.resource.inspect}: give both the same value"
+        end
+        if verifier.issuer != metadata.authorization_server
+          raise ArgumentError, "the verifier's issuer #{verifier.issuer.inspect} is not the authorization server " \
+                               "#{metadata.authorization_server.inspect}: give both the same value"
         end
 
         @app = app
@@ -66,7 +79,7 @@ module Keelie
           return Rack.respond(200, { "content-type" => "application/json" }, @metadata.document,
                               head: method == "HEAD")
         end
-        return @app.call(env) unless Rack.guarded?(method, path, @metadata)
+        return @app.call(env) if Rack.preflight?(env) || !Rack.guarded?(method, path, @metadata)
 
         token = Keelie.bearer_token(env["HTTP_AUTHORIZATION"])
         return Rack.respond(401, { "www-authenticate" => @challenge }) if token.nil?
@@ -115,8 +128,9 @@ module Keelie
     # - Every other method passes with no scope check: +initialize+,
     #   +notifications/*+, +ping+, +tools/list+, and also +resources/*+ and
     #   +prompts/*+. Apiable sells tools, not resources or prompts.
-    # - GET, HEAD and DELETE pass, and so does a CORS preflight (OPTIONS). Every other
-    #   method gets 405, with +Allow: GET, POST, DELETE+.
+    # - GET, HEAD and DELETE pass. Every other method gets 405, with
+    #   +Allow: GET, POST, DELETE+. An OPTIONS request that is not a CORS preflight
+    #   needs a token, then gets 405.
     #
     # Every refusal is a JSON-RPC error:
     #
@@ -247,6 +261,10 @@ module Keelie
       end
     end
 
+    # The headers that make a framework route a request as another method. An OPTIONS
+    # request with one of them is not a CORS preflight.
+    METHOD_OVERRIDE_HEADERS = %w[HTTP_X_HTTP_METHOD_OVERRIDE HTTP_X_HTTP_METHOD HTTP_X_METHOD_OVERRIDE].freeze
+
     # The most forms of one path the guard compares, besides the fully normalized one.
     MAX_FORMS = 128
     # The longest path whose forms the guard makes. A longer path that a router could
@@ -262,13 +280,24 @@ module Keelie
       end
 
       # @api private
-      # True for a request under +resource+ that must carry a token.
+      # True for a CORS preflight, which passes with no token. That is an OPTIONS request
+      # with an +Origin+ and an +Access-Control-Request-Method+ header, and with none of
+      # the headers that make a framework route it as another method. CORS middleware
+      # such as rack-cors hands a request with no +Origin+ to the app. Every other
+      # OPTIONS request is guarded like any other method.
+      def preflight?(env)
+        env["REQUEST_METHOD"] == "OPTIONS" && !env["HTTP_ORIGIN"].nil? &&
+          !env["HTTP_ACCESS_CONTROL_REQUEST_METHOD"].nil? && METHOD_OVERRIDE_HEADERS.none? { env.key?(_1) }
+      end
+
+      # @api private
+      # True for a request under +resource+ that must carry a token. The guards let a
+      # CORS preflight pass first: see {preflight?}.
       #
-      # A CORS preflight (OPTIONS) and every path outside +resource+ pass. So does a GET
-      # or a HEAD of the metadata, and of the AI Catalog at either of its paths when the
-      # catalog serves it. Any other method on those paths needs a token.
+      # Every path outside +resource+ passes. So does a GET or a HEAD of the metadata,
+      # and of the AI Catalog at either of its paths when the catalog serves it. Any
+      # other method on those paths needs a token.
       def guarded?(method, path, metadata)
-        return false if method == "OPTIONS"
         if %w[GET HEAD].include?(method) &&
            (path == metadata.path || (metadata.ai_catalog && CATALOG_MEDIA_TYPES.key?(path)))
           return false

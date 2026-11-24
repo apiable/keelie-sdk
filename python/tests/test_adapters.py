@@ -23,6 +23,7 @@ from apiable.tokens import Claims
 
 RESOURCE = AUDIENCE
 METADATA_URL = "https://api.example.test/.well-known/oauth-protected-resource/api"
+ORIGIN = "https://app.example.test"
 TOOLS_LIST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
 Adapter = Callable[[ASGIApp, TokenVerifier], ASGIApp]
@@ -105,6 +106,67 @@ def test_neither_adapter_starts_for_an_audience_that_is_not_the_resource(
     with pytest.raises(ValueError, match="is not the resource"):
         adapter(_provider, elsewhere)
     assert adapter(_provider, verifier) is not None
+
+
+@ADAPTERS
+def test_neither_adapter_starts_for_an_issuer_that_is_not_the_authorization_server(
+    adapter: Adapter,
+) -> None:
+    """An agent gets its token from the issuer the metadata names. A verifier for
+    another issuer would refuse every such token."""
+    elsewhere = TokenVerifier("https://issuer.example.test/realms/other", AUDIENCE, ORG_ID)
+
+    with pytest.raises(ValueError, match="is not the authorization server"):
+        adapter(_provider, elsewhere)
+
+
+@ADAPTERS
+def test_a_loopback_http_issuer_builds_a_guard_with_matching_metadata(adapter: Adapter) -> None:
+    local = "http://localhost:8080/realms/test"
+    verifier = TokenVerifier(local, AUDIENCE, ORG_ID)
+    metadata = ProtectedResourceMetadata(RESOURCE, local)
+    reporter = UsageReporter(httpx.AsyncClient())
+
+    assert TokenGuard(_provider, verifier, metadata) is not None
+    assert McpGuard(_provider, verifier, metadata, {}, reporter=reporter) is not None
+
+
+@ADAPTERS
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        ({}, 401),
+        ({"Origin": ORIGIN, "Access-Control-Request-Method": "POST"}, 200),
+        ({"Access-Control-Request-Method": "POST"}, 401),
+        ({"Origin": ORIGIN}, 401),
+        (
+            {
+                "Origin": ORIGIN,
+                "Access-Control-Request-Method": "POST",
+                "X-HTTP-Method-Override": "GET",
+            },
+            401,
+        ),
+    ],
+    ids=["bare", "preflight", "no-origin", "no-acrm", "override"],
+)
+async def test_only_a_cors_preflight_passes_both_adapters_with_no_token(
+    adapter: Adapter, verifier: TokenVerifier, headers: dict[str, str], status: int
+) -> None:
+    """A route that accepts OPTIONS, or an endpoint with an ``options()`` method, must not
+    run with no token. Only a real preflight passes, for the Provider's CORS middleware."""
+    ran: list[str] = []
+
+    async def provider(scope: Scope, receive: Receive, send: Send) -> None:
+        ran.append(str(scope["method"]))
+        await _provider(scope, receive, send)
+
+    transport = httpx.ASGITransport(app=adapter(provider, verifier))
+    async with httpx.AsyncClient(transport=transport, base_url="https://api.example.test") as c:
+        response = await c.options("/api", headers=headers)
+
+    assert response.status_code == status
+    assert ran == (["OPTIONS"] if status == 200 else [])
 
 
 @ADAPTERS

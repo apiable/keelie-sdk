@@ -25,6 +25,7 @@
 
 import { decodeProtectedHeader, errors, jwtVerify, type JWTPayload } from "jose";
 
+import { requireHttps } from "./discovery.js";
 import { ALGORITHM, KeysUnavailable, SigningKeys, UnknownKey, type Status } from "./keys.js";
 import { log } from "./log.js";
 import { parseUuid } from "./uuid.js";
@@ -93,7 +94,8 @@ export interface TokenVerifierOptions {
 /**
  * Verifies the tokens of one issuer, for one audience and one org.
  *
- * `issuer` is the `issuer` member of your org in keelie: your own realm.
+ * `issuer` is the `issuer` member of your org in keelie: your own realm. It must
+ * be https; plain http is taken only for a loopback host.
  * `audience` is your API's `resource` in keelie, exactly.
  */
 export class TokenVerifier {
@@ -106,11 +108,16 @@ export class TokenVerifier {
   constructor(issuer: string, audience: string, orgId: string, options: TokenVerifierOptions = {}) {
     const org = parseUuid(orgId);
     if (org === null) throw new TypeError(`orgId is not a UUID: ${JSON.stringify(orgId)}`);
-    this.#issuer = issuer;
+    this.#issuer = requireHttps("issuer", issuer);
     this.#audience = audience;
     this.#orgId = org;
     this.#keys = options.keys ?? new SigningKeys(issuer);
     this.#leeway = options.leewaySeconds ?? LEEWAY_SECONDS;
+  }
+
+  /** The `iss` every token must carry: your own realm. */
+  get issuer(): string {
+    return this.#issuer;
   }
 
   /** The `aud` every token must carry: your server's `resource` in keelie. */

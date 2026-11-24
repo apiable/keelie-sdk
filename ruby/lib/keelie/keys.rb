@@ -22,22 +22,35 @@ module Keelie
   # Once a key set is in hand, at most one fetch a minute, however many unknown
   # +kid+ values arrive and whether or not the fetch succeeds. A flood of made-up
   # +kid+ values costs the issuer one request a minute, also while the issuer is
-  # down. With no key set in hand, a failed fetch caches nothing, and the next
-  # caller tries again.
+  # down.
   #
-  # The +jwks_uri+ from the first discovery is kept for the life of the process. A
+  # With no key set in hand, every thread that finds the cache cold waits on one
+  # fetch and gets its outcome, a failure too. After a failed fetch, the SDK asks the
+  # issuer again only after {COLD_RETRY_SECONDS}. Until then each token is refused at
+  # once, as keys unavailable.
+  #
+  # A fetch that gives no usable signing key is a failed fetch. With a key set in
+  # hand, the keys in hand stay and go on verifying. A set with at least one usable
+  # key replaces the old set, so a rotation still retires the old keys.
+  #
+  # The issuer and the +jwks_uri+ must be https, or plain http on a loopback host. The
+  # +jwks_uri+ from the first discovery is kept for the life of the process. A
   # discovery document whose +issuer+ is not the configured one is refused, and no
   # key is fetched from it (OpenID Connect Discovery 1.0, section 4.3). Each
   # Provider has its own realm, so each issuer has its own key set: a document of
   # another realm must never fill this one's.
   #
-  # It is safe to share between threads. Every thread that finds the cache cold, or
-  # its +kid+ missing, waits on the same fetch.
+  # It is safe to share between threads.
   class SigningKeys
     # How long the cache refuses a second fetch after one completed. Shorter than any
     # token lifetime, so a rotation is never waited out.
     REFRESH_INTERVAL_SECONDS = 60.0
+    # How long one request of a fetch may take, in all. A cold fetch makes two: the
+    # discovery document, then the key set.
     FETCH_TIMEOUT_SECONDS = 5.0
+    # With no key set in hand, how long a failed fetch is remembered. In that time each
+    # token is refused at once, and the issuer is not asked.
+    COLD_RETRY_SECONDS = 5.0
     # An RSA key under this many bits is skipped: it verifies nothing.
     MIN_MODULUS_BITS = 2048
 
@@ -47,7 +60,7 @@ module Keelie
     # +http+ is the client the keys are fetched with (see {HTTP}). +clock+ gives
     # seconds from any fixed point.
     def initialize(issuer, http: nil, clock: nil, refresh_interval_seconds: REFRESH_INTERVAL_SECONDS)
-      @issuer = issuer.sub(%r{/+\z}, "")
+      @issuer = HTTP.secure_url!("issuer", issuer).sub(%r{/+\z}, "")
       @http = http || HTTP.for(FETCH_TIMEOUT_SECONDS)
       @clock = clock || -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
       @interval = refresh_interval_seconds
@@ -55,6 +68,12 @@ module Keelie
       @jwks_uri = nil
       @fetched_at = nil
       @refresh_failed = false
+      # With no key set in hand: when the last fetch failed, and why.
+      @failed_at = nil
+      @failure = nil
+      # The count of fetches that have ended. A thread that waited on the lock while one
+      # ended takes its outcome, and does not fetch again.
+      @fetches = 0
       @lock = Mutex.new
     end
 
@@ -64,8 +83,14 @@ module Keelie
       known = @keys[kid]
       return known if known
 
+      fetches = @fetches
       @lock.synchronize do
-        refresh if !@keys.key?(kid) && may_fetch?
+        refresh if @fetches == fetches && !@keys.key?(kid) && may_fetch?
+      end
+      if @keys.empty?
+        # Cold: nothing to verify with.
+        Log.warn("apiable.keys_unavailable: #{@failure}")
+        raise KeysUnavailable, @failure
       end
       @keys[kid] or raise UnknownKey, "unknown kid"
     end
@@ -80,29 +105,37 @@ module Keelie
     private
 
     def may_fetch?
-      @fetched_at.nil? || @clock.call - @fetched_at >= @interval
+      now = @clock.call
+      return @failed_at.nil? || now - @failed_at >= COLD_RETRY_SECONDS if @keys.empty?
+
+      now - @fetched_at >= @interval
     end
 
     def refresh
       begin
         keys = signing_keys(fetch)
       rescue StandardError => e
-        if @fetched_at.nil?
-          # Cold: nothing to verify with. Nothing is cached, so the next caller tries again.
-          Log.warn("apiable.keys_unavailable: #{e.class.name}")
-          raise KeysUnavailable, e.class.name
+        if @keys.empty?
+          # Cold: the failure is kept for a few seconds, and every caller gets it.
+          @failed_at = @clock.call
+          @failure = e.class.name
+        else
+          # Warm: the keys in hand go on verifying, and the issuer is not asked again
+          # for another interval.
+          @fetched_at = @clock.call
+          @refresh_failed = true
+          Log.warn("apiable.keys_not_refreshed: #{e.class.name}")
         end
-        # Warm: the keys in hand go on verifying, and the issuer is not asked again
-        # for another interval.
+      else
+        @keys = keys.freeze
         @fetched_at = @clock.call
-        @refresh_failed = true
-        Log.warn("apiable.keys_not_refreshed: #{e.class.name}")
-        return
+        @refresh_failed = false
+        @failed_at = nil
+        @failure = nil
+        Log.info("apiable.keys_loaded kids=#{keys.keys.sort.inspect}")
+      ensure
+        @fetches += 1
       end
-      @keys = keys.freeze
-      @fetched_at = @clock.call
-      @refresh_failed = false
-      Log.info("apiable.keys_loaded kids=#{keys.keys.sort.inspect}")
     end
 
     def fetch
@@ -113,7 +146,8 @@ module Keelie
         raise KeySetError, "issuer" unless issuer.is_a?(String) && issuer.sub(%r{/+\z}, "") == @issuer
 
         jwks_uri = member(document, "jwks_uri")
-        raise KeySetError, "jwks_uri" unless jwks_uri.is_a?(String)
+        # The key set decides which tokens verify: it must come over https too.
+        raise KeySetError, "jwks_uri" unless jwks_uri.is_a?(String) && HTTP.secure_url?(jwks_uri)
       end
       key_set = member(get_json(jwks_uri), "keys")
       @jwks_uri = jwks_uri
@@ -151,6 +185,9 @@ module Keelie
           Log.warn("apiable.key_skipped kid=#{jwk["kid"]}")
         end
       end
+      # A set with no key to verify with is a failed fetch: the keys in hand stay.
+      raise KeySetError, "no signing key" if keys.empty?
+
       keys
     end
 

@@ -18,8 +18,11 @@
 // Each guard also serves the RFC 9728 metadata at metadata.Path(), with no
 // token, and refuses a request with no token with 401 and
 // WWW-Authenticate: Bearer resource_metadata="...", so an agent can find your
-// issuer. Paths outside the resource and a CORS preflight (OPTIONS) pass
-// untouched.
+// issuer. Paths outside the resource pass untouched. So does a CORS preflight:
+// an OPTIONS request with an Origin and an Access-Control-Request-Method
+// header, and no method-override header (X-HTTP-Method-Override, X-HTTP-Method or
+// X-Method-Override). Your CORS middleware answers it. Every other OPTIONS
+// request needs a token, like any other method.
 package nethttp
 
 import (
@@ -61,9 +64,15 @@ func WithClaims(ctx context.Context, claims *keelie.Claims) context.Context {
 // It does not check the scope. Middleware around the router runs before the
 // router picks a route, so it cannot see the route's template. Put
 // [ScopeGuard] on each route, or call ScopeMap.Check in it. A route without
-// either is authenticated, but it has no scope check.
+// either is authenticated, but it has no scope check. This holds for every
+// method of the route. Only a CORS preflight passes with no token: an OPTIONS
+// request with an Origin and an Access-Control-Request-Method header, and no
+// method-override header. It reaches your handler with no claims. Put your CORS middleware in front of the guard, so that it answers
+// the preflight.
 //
-// The verifier's audience must be the resource of the metadata, or it is an error.
+// The verifier's audience must be the resource of the metadata, and the
+// verifier's issuer must be the authorization server of the metadata, or it is
+// an error.
 func TokenGuard(verifier *keelie.TokenVerifier, metadata *keelie.ProtectedResourceMetadata) (func(http.Handler) http.Handler, error) {
 	return guard(verifier, metadata, func(claims *keelie.Claims, w http.ResponseWriter, r *http.Request, next http.Handler) {
 		next.ServeHTTP(w, r.WithContext(WithClaims(r.Context(), claims)))
@@ -172,10 +181,18 @@ type handleFunc func(claims *keelie.Claims, w http.ResponseWriter, r *http.Reque
 // 8707), and keelie writes your org's resource into aud. A verifier for another
 // audience would refuse every such token, or accept a token for another server.
 // Set your org's resource in keelie to the same value.
+//
+// The verifier's issuer must be the authorization server of the metadata, too.
+// The agent gets its token from the issuer the metadata names. A verifier of
+// another issuer would refuse every such token.
 func guard(verifier *keelie.TokenVerifier, metadata *keelie.ProtectedResourceMetadata, handle handleFunc) (func(http.Handler) http.Handler, error) {
 	if verifier.Audience() != metadata.Resource() {
 		return nil, fmt.Errorf("keelie: the verifier's audience %q is not the resource %q: give both the same value",
 			verifier.Audience(), metadata.Resource())
+	}
+	if verifier.Issuer() != metadata.AuthorizationServer() {
+		return nil, fmt.Errorf("keelie: the verifier's issuer %q is not the authorization server %q: give both the same value",
+			verifier.Issuer(), metadata.AuthorizationServer())
 	}
 	challenge := metadata.Challenge("")
 	refusal := metadata.Challenge("invalid_token")
@@ -207,9 +224,37 @@ func guard(verifier *keelie.TokenVerifier, metadata *keelie.ProtectedResourceMet
 	}, nil
 }
 
+// isPreflight is true for a CORS preflight, which every guard passes with no
+// token. All of these must hold:
+//
+//   - the method is OPTIONS;
+//   - the request has an Origin header: some CORS middleware hands an OPTIONS
+//     with no Origin on to the app;
+//   - the request has an Access-Control-Request-Method header;
+//   - it has none of the headers X-HTTP-Method-Override, X-HTTP-Method and
+//     X-Method-Override. A framework could route such a request as another
+//     method, so it is guarded like any other.
+//
+// Every other OPTIONS request needs a token. Your CORS middleware answers the
+// preflight: put it in front of the guard.
+func isPreflight(r *http.Request) bool {
+	if r.Method != http.MethodOptions || len(r.Header.Values("Origin")) == 0 ||
+		len(r.Header.Values("Access-Control-Request-Method")) == 0 {
+		return false
+	}
+	for _, name := range methodOverrides {
+		if len(r.Header.Values(name)) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+var methodOverrides = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"}
+
 // guarded is true for a request under the resource that must carry a token.
 //
-// A CORS preflight (OPTIONS) and every path outside the resource pass. So does
+// A CORS preflight (isPreflight) and every path outside the resource pass. So does
 // a GET or a HEAD of the metadata, and of the AI Catalog at either of its paths
 // when the catalog serves it, each compared exactly, as sent. Any other method
 // on those paths needs a token.
@@ -220,7 +265,7 @@ func guard(verifier *keelie.TokenVerifier, metadata *keelie.ProtectedResourceMet
 // that is under the resource in any of these forms is guarded. It can only
 // guard more than the router serves, never less.
 func guarded(r *http.Request, metadata *keelie.ProtectedResourceMetadata) bool {
-	if r.Method == http.MethodOptions {
+	if isPreflight(r) {
 		return false
 	}
 	sent := r.URL.EscapedPath()

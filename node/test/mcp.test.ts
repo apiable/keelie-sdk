@@ -196,6 +196,29 @@ describe("mcpGuard", () => {
     assert.equal(put.headers.get("allow"), "GET, POST, DELETE");
   });
 
+  it("lets a CORS preflight pass, and guards any other OPTIONS", async () => {
+    const options = (headers: Record<string, string>) => fetch(`${url}/mcp`, { method: "OPTIONS", headers });
+    const preflight = await options({ Origin: "https://app.example.com", "Access-Control-Request-Method": "POST" });
+    assert.notEqual(preflight.status, 401);
+    assert.notEqual(preflight.status, 405);
+    assert.equal((await options({})).status, 401);
+    assert.equal((await options({ "Access-Control-Request-Method": "POST" })).status, 401); // no Origin
+    assert.equal(
+      (
+        await options({
+          Origin: "https://app.example.com",
+          "Access-Control-Request-Method": "POST",
+          "X-HTTP-Method-Override": "POST",
+        })
+      ).status,
+      401,
+    );
+    // With a token, an OPTIONS that is not a preflight is a method the guard refuses.
+    const plain = await options({ Authorization: `Bearer ${token}` });
+    assert.equal(plain.status, 405);
+    assert.equal(plain.headers.get("allow"), "GET, POST, DELETE");
+  });
+
   it("checks the token first", async () => {
     const none = await fetch(`${url}/mcp`, { method: "POST", body: "{}" });
     assert.equal(none.status, 401);

@@ -180,7 +180,7 @@ internal sealed class FakeIssuer : HttpMessageHandler
 
     public string Says { get; set; }
 
-    public string JwksUri { get; }
+    public string JwksUri { get; set; }
 
     public List<object> Keys { get; set; } = [];
 

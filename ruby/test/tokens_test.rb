@@ -39,6 +39,12 @@ class TokensTest < Minitest::Test
     assert_equal 1, @issuer.jwks_fetches
   end
 
+  def test_needs_an_https_issuer
+    assert_raises(ArgumentError) { Keelie::TokenVerifier.new("http://issuer.example.com/realms/a", RESOURCE, ORG_ID) }
+    assert_equal "http://localhost:8080/realms/a",
+                 Keelie::TokenVerifier.new("http://localhost:8080/realms/a", RESOURCE, ORG_ID).issuer
+  end
+
   def test_says_when_the_token_expires
     exp = Time.now.to_i + 300
     assert_equal Time.at(exp).utc, @verifier.verify(sign(@pair, "exp" => exp)).expires_at
@@ -197,6 +203,7 @@ class TokensTest < Minitest::Test
     end
     assert_equal :offline, @verifier.status
     @issuer.down = false
+    @clock.now += 5
     @verifier.verify(sign(@pair))
     assert_equal :connected, @verifier.status
   end

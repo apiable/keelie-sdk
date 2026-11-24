@@ -56,6 +56,9 @@ public sealed class UsageReporterOptions
 /// <list type="bullet">
 /// <item>A network error, a <c>401</c>, <c>408</c>, <c>409</c>, <c>429</c> or a <c>5xx</c> keeps the
 /// batch. The reporter sends it again after one interval. It does not read <c>Retry-After</c>.</item>
+/// <item>A batch that keelie answers with <c>401</c> or <c>409</c> 5 times is dropped, with a log
+/// line: <c>apiable.usage_dropped events=N reason=refused</c>. A revoked credential gets these
+/// answers for good, and the batch must not block the batches after it.</item>
 /// <item>Any other answer drops the batch, with a log line. A retry gets the same answer.</item>
 /// <item>When the buffer is full, the oldest event goes, and a log line counts it.</item>
 /// </list>
@@ -93,6 +96,9 @@ public sealed class UsageReporter : IAsyncDisposable
 
     /// <summary>How long <see cref="CloseAsync"/> tries to send what is left.</summary>
     public static readonly TimeSpan DefaultCloseTimeout = TimeSpan.FromSeconds(10);
+
+    // How many times a batch may be answered 401 or 409 before it is dropped.
+    private const int MaxRefusals = 5;
 
     private const int MaxNameLength = 255;
     private const decimal MaxAmount = 1_000_000_000m;
@@ -474,6 +480,13 @@ public sealed class UsageReporter : IAsyncDisposable
                 Log.Debug(Category, "apiable.usage_sent events={Events}", batch.Count);
                 return true;
             }
+            if (status is 401 or 409 && ++batch.Refusals >= MaxRefusals)
+            {
+                // keelie refuses the batch every time, such as for a revoked credential. Sent
+                // again, it would block every batch after it.
+                Log.Warn(Category, "apiable.usage_dropped events={Events} reason=refused status={Status}", batch.Count, status);
+                return true;
+            }
             if (status is 401 or 408 or 409 or 429 || status >= 500)
             {
                 Log.Warn(Category, "apiable.usage_not_sent events={Events} status={Status}", batch.Count, status);
@@ -576,5 +589,9 @@ public sealed class UsageReporter : IAsyncDisposable
         }
     }
 
-    private sealed record Batch(string Key, byte[] Body, int Count);
+    private sealed record Batch(string Key, byte[] Body, int Count)
+    {
+        /// <summary>How many times keelie answered it <c>401</c> or <c>409</c>.</summary>
+        public int Refusals { get; set; }
+    }
 }
