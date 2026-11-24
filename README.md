@@ -6,8 +6,9 @@ tokens and scopes inside your own process, and it reports usage.
 > **Status: in development. The code here is not released, and it has no stable API yet.**
 > The first release is for Python and any ASGI framework, such as FastAPI. A Node package for
 > Express, in `node/`, a Go module, with `net/http` middleware, in `go/`, a Ruby gem, for any
-> Rack app with a scope check for Rails, in `ruby/`, and a .NET package for ASP.NET Core, in
-> `dotnet/`, are in development beside it. Other languages follow.
+> Rack app with a scope check for Rails, in `ruby/`, a .NET package for ASP.NET Core, in
+> `dotnet/`, and a PHP package with PSR-15 middleware, in `php/`, are in development beside it.
+> Other languages follow.
 > Everything that ships is published here, under the Apache License 2.0, so that you can read what
 > runs in your process instead of taking our word for it.
 
@@ -21,6 +22,7 @@ tokens and scopes inside your own process, and it reports usage.
 | [Go SDK reference](docs/go.md) | Every type and function of the Go module, and where Go differs from Python. |
 | [Ruby SDK reference](docs/ruby.md) | The Ruby gem, for Rack and Rails, and where it differs from Python. |
 | [.NET SDK reference](docs/dotnet.md) | The same for .NET and ASP.NET Core, and where .NET differs from Python. |
+| [PHP SDK reference](docs/php.md) | The PHP package, for PSR-15 frameworks, and where PHP differs from Python. |
 | [When keelie is down](docs/when-keelie-is-down.md) | What the SDK does in each failure. |
 
 **You can use keelie without this SDK.** The token is a standard JWT, and the usage API is plain
@@ -55,6 +57,7 @@ with each keelie release.
 | [`go/`](go/) | The Go module `github.com/apiable/keelie-sdk/go`. Not tagged yet. |
 | [`ruby/`](ruby/) | The Ruby gem `keelie`. Not on RubyGems yet. |
 | [`dotnet/`](dotnet/) | The .NET packages `Keelie` and `Keelie.AspNetCore`. Not released; nothing is on NuGet yet. |
+| [`php/`](php/) | The PHP package `apiable/keelie-sdk`, with PSR-15 middleware. Not released; nothing is on Packagist yet. |
 | [`docs/`](docs/) | The documentation. |
 
 ## Security
