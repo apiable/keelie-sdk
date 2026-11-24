@@ -1107,6 +1107,18 @@
         "title": "CreditPack",
         "type": "object"
       },
+      "DelistingReason": {
+        "description": "Why Keelie took an entry out. Each value is a rule of the listing policy.",
+        "enum": [
+          "impersonation",
+          "malware",
+          "illegal",
+          "agent_instructions",
+          "lapsed_proof"
+        ],
+        "title": "DelistingReason",
+        "type": "string"
+      },
       "DomainProof": {
         "description": "The DNS TXT record that proves a domain belongs to this Provider.",
         "properties": {
@@ -3482,6 +3494,22 @@
       "ProductRegistry": {
         "description": "The product's place in the Keelie Registry.",
         "properties": {
+          "delisted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When Keelie took the entry out, when `state` is `delisted`.",
+            "examples": [
+              null
+            ],
+            "title": "Delisted At"
+          },
           "host": {
             "description": "The host of the product's URL: the publisher of its registry entry.",
             "examples": [
@@ -3489,6 +3517,20 @@
             ],
             "title": "Host",
             "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DelistingReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why Keelie took the entry out, when `state` is `delisted`, and `null` otherwise. Each value is a rule of the listing policy. To ask for a review, write to registry@keelie.io.",
+            "examples": [
+              null
+            ]
           },
           "state": {
             "$ref": "#/components/schemas/RegistryState",
@@ -4009,6 +4051,52 @@
         "title": "PublisherDomainRead",
         "type": "object"
       },
+      "RegistryReferral": {
+        "description": "Another registry the agent may ask (ARD section 5.4, `RegistryReferral`). The Keelie\nRegistry does not check it, rank it or vouch for it.",
+        "properties": {
+          "displayName": {
+            "description": "The referred registry's name.",
+            "examples": [
+              "Portal Labs Registry"
+            ],
+            "title": "Displayname",
+            "type": "string"
+          },
+          "identifier": {
+            "description": "The referred registry's identifier.",
+            "examples": [
+              "urn:air:registry.portal-labs.example:registry:public"
+            ],
+            "title": "Identifier",
+            "type": "string"
+          },
+          "type": {
+            "const": "application/ai-registry+json",
+            "description": "The media type of a registry.",
+            "examples": [
+              "application/ai-registry+json"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "description": "The complete URL of the referred registry's search. Send a search there as it is: do not append `/search`.",
+            "examples": [
+              "https://registry.portal-labs.example/search"
+            ],
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "identifier",
+          "displayName",
+          "type",
+          "url"
+        ],
+        "title": "RegistryReferral",
+        "type": "object"
+      },
       "RegistryState": {
         "description": "Whether the Keelie Registry lists a product.",
         "enum": [
@@ -4155,7 +4243,7 @@
         "properties": {
           "federation": {
             "default": "auto",
-            "description": "Which registries to ask. This registry has no upstream registry yet, so each value searches the Keelie Registry only.",
+            "description": "Which registries to ask. Each value searches the Keelie Registry only: it never sends a search to another registry. `referrals`: the first page also names other registries the agent may ask, in `referrals`. `none` and `auto`: no `referrals`. The Keelie Registry merges no answer of another registry into its own.",
             "enum": [
               "auto",
               "referrals",
@@ -4232,6 +4320,31 @@
               "NwGa0aZRZXRhWB_lsqkBLA2CO_bbqzmUiA"
             ],
             "title": "Pagetoken"
+          },
+          "referrals": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RegistryReferral"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Other registries the agent may ask, with `federation: \"referrals\"`, on the first page only. Absent otherwise, and when this registry refers to none. A filter never changes the list. The Keelie Registry does not check a referred registry, and sends it nothing.",
+            "examples": [
+              [
+                {
+                  "displayName": "Portal Labs Registry",
+                  "identifier": "urn:air:registry.portal-labs.example:registry:public",
+                  "type": "application/ai-registry+json",
+                  "url": "https://registry.portal-labs.example/search"
+                }
+              ]
+            ],
+            "title": "Referrals"
           },
           "results": {
             "description": "The results, by score, highest first.",
